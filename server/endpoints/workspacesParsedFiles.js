@@ -6,7 +6,7 @@ const {
   flexUserRoleValid,
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const { validWorkspaceSlug } = require("../utils/middleware/validWorkspace");
 const { CollectorApi } = require("../utils/collectorApi");
 const { WorkspaceThread } = require("../models/workspaceThread");
@@ -59,6 +59,22 @@ function workspaceParsedFilesEndpoints(app) {
           ...(user ? { userId: user.id } : {}),
           workspaceId: workspace.id,
         });
+        await audit.record(
+          {
+            action: "parsed_file.deleted",
+            outcome: success ? "success" : "denied",
+            reason: success ? undefined : "not_found_or_not_owner",
+            targetType: "workspace",
+            targetId: workspace.id,
+            workspaceId: workspace.id,
+            metadata: {
+              fileIds: fileIds.map((id) => parseInt(id)),
+              count: fileIds.length,
+              workspaceSlug: workspace.slug,
+            },
+          },
+          { response }
+        );
         return response.status(success ? 200 : 403).end();
       } catch (e) {
         console.error(e.message, e);
@@ -97,13 +113,15 @@ function workspaceParsedFilesEndpoints(app) {
         }
 
         await Telemetry.sendTelemetry("document_embedded");
-        await EventLogs.logEvent(
-          "document_embedded",
+        await audit.record(
           {
-            documentName: document?.filename || "unknown",
+            action: "parsed_file.embedded",
+            targetType: "parsed_file",
+            targetId: fileId,
             workspaceId: workspace.id,
+            metadata: { fileId: Number(fileId), workspaceSlug: workspace.slug },
           },
-          user?.id
+          { response }
         );
 
         return response.status(200).json({
@@ -140,6 +158,19 @@ function workspaceParsedFilesEndpoints(app) {
             )
           )
         );
+        // The parsed-file records are consumed and the files become documents.
+        const moved = locations.filter(Boolean).length;
+        if (moved > 0)
+          await audit.record(
+            {
+              action: "document.uploaded",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: { via: "parsed_file", count: moved },
+            },
+            { response }
+          );
         return response.status(200).json({ locations });
       } catch (e) {
         console.error(e.message, e);
@@ -214,15 +245,6 @@ function workspaceParsedFilesEndpoints(app) {
         );
 
         Collector.log(`Document ${originalname} parsed successfully.`);
-        await EventLogs.logEvent(
-          "document_uploaded_to_chat",
-          {
-            documentName: originalname,
-            workspace: workspace.slug,
-            thread: thread?.name || null,
-          },
-          user?.id
-        );
 
         return response.status(200).json({
           success: true,

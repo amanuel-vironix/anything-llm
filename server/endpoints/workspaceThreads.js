@@ -10,7 +10,7 @@ const {
   flexUserRoleValid,
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const { WorkspaceThread } = require("../models/workspaceThread");
 const {
   validWorkspaceSlug,
@@ -48,12 +48,20 @@ function workspaceThreadEndpoints(app) {
           user?.id
         );
 
-        await EventLogs.logEvent(
-          "workspace_thread_created",
+        await audit.record(
           {
-            workspaceName: workspace?.name || "Unknown Workspace",
+            action: "thread.created",
+            outcome: thread ? "success" : "failed",
+            reason: thread ? undefined : "create_failed",
+            targetType: "thread",
+            targetId: thread?.id,
+            workspaceId: workspace.id,
+            metadata: {
+              threadSlug: thread?.slug,
+              workspaceSlug: workspace.slug,
+            },
           },
-          user?.id
+          { response }
         );
         response.status(200).json({ thread, message });
       } catch (e) {
@@ -101,7 +109,41 @@ function workspaceThreadEndpoints(app) {
     async (_, response) => {
       try {
         const thread = response.locals.thread;
-        await WorkspaceThread.delete({ id: thread.id });
+        const workspace = response.locals.workspace;
+        const deleted = await WorkspaceThread.delete({ id: thread.id });
+        await audit.record(
+          {
+            action: "thread.deleted",
+            outcome: deleted ? "success" : "failed",
+            reason: deleted ? undefined : "delete_failed",
+            targetType: "thread",
+            targetId: thread.id,
+            workspaceId: workspace?.id,
+            metadata: {
+              threadSlug: thread.slug,
+              workspaceSlug: workspace?.slug,
+            },
+          },
+          { response }
+        );
+        // Deleting a thread hides its chats (rows are kept for usage limits).
+        if (
+          deleted &&
+          !(await audit.recordOrFail(
+            {
+              action: "chat.hidden",
+              targetType: "thread",
+              targetId: thread.id,
+              workspaceId: workspace?.id,
+              metadata: {
+                threadId: thread.id,
+                workspaceSlug: workspace?.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -120,11 +162,40 @@ function workspaceThreadEndpoints(app) {
 
         const user = await userFromSession(request, response);
         const workspace = response.locals.workspace;
-        await WorkspaceThread.delete({
+        const clause = {
           slug: { in: slugs },
           user_id: user?.id ?? null,
           workspace_id: workspace.id,
-        });
+        };
+        const doomed = await WorkspaceThread.where(clause);
+        const deleted = await WorkspaceThread.delete(clause);
+        await audit.record(
+          {
+            action: "thread.deleted",
+            outcome: deleted ? "success" : "failed",
+            reason: deleted ? undefined : "delete_failed",
+            targetType: "workspace",
+            targetId: workspace.id,
+            workspaceId: workspace.id,
+            metadata: { workspaceSlug: workspace.slug, count: doomed.length },
+          },
+          { response }
+        );
+        if (
+          deleted &&
+          doomed.length > 0 &&
+          !(await audit.recordOrFail(
+            {
+              action: "chat.hidden",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: { workspaceSlug: workspace.slug },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -180,6 +251,21 @@ function workspaceThreadEndpoints(app) {
           currentThread,
           data
         );
+        await audit.record(
+          {
+            action: "thread.renamed",
+            outcome: thread && !message ? "success" : "failed",
+            reason: thread && !message ? undefined : "update_failed",
+            targetType: "thread",
+            targetId: currentThread.id,
+            workspaceId: response.locals.workspace?.id,
+            metadata: {
+              threadSlug: currentThread.slug,
+              workspaceSlug: response.locals.workspace?.slug,
+            },
+          },
+          { response }
+        );
         response.status(200).json({ thread, message });
       } catch (e) {
         console.error(e.message, e);
@@ -215,6 +301,22 @@ function workspaceThreadEndpoints(app) {
           id: { gte: Number(startingId) },
         });
 
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.hidden",
+              targetType: "thread",
+              targetId: thread.id,
+              workspaceId: workspace.id,
+              metadata: {
+                threadId: thread.id,
+                workspaceSlug: workspace.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -246,6 +348,24 @@ function workspaceThreadEndpoints(app) {
           id: Number(chatId),
         });
         if (!existingChat) throw new Error("Invalid chat.");
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.edited",
+              targetType: "chat",
+              targetId: existingChat.id,
+              workspaceId: workspace.id,
+              metadata: {
+                role: role === "user" ? "user" : "assistant",
+                workspaceSlug: workspace.slug,
+                threadId: thread.id,
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         if (role === "user") {
           await WorkspaceChats._update(existingChat.id, {

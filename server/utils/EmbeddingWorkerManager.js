@@ -1,5 +1,5 @@
 const path = require("path");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("./audit");
 
 /** @type {Map<string, { worker: ChildProcess, jobId: string }>} */
 const runningWorkers = new Map();
@@ -36,17 +36,26 @@ function emitProgress(slug, event) {
 }
 
 function logEmbeddingEvent(msg) {
-  EventLogs.logEvent(
-    "workspace_documents_added",
-    {
-      workspaceName: msg.workspaceSlug,
-      embeddedFiles: msg.embeddedFiles ?? [],
-      failedFiles: msg.failedFiles ?? [],
-      embedded: msg.embedded ?? 0,
-      failed: msg.failed ?? 0,
-    },
-    msg.userId ?? null
-  ).catch(() => {});
+  const embedded = msg.embedded ?? 0;
+  const failed = msg.failed ?? 0;
+  // Not awaited: a worker message must never wait on the audit write. The
+  // request that started the job has usually finished, so the actor is named.
+  audit
+    .record({
+      action: "document.embedded",
+      outcome: failed > 0 && embedded === 0 ? "failed" : "success",
+      reason: failed > 0 && embedded === 0 ? "embed_failed" : undefined,
+      actor: msg.userId ? { type: "user", id: msg.userId } : undefined,
+      targetType: "workspace",
+      metadata: {
+        workspaceName: msg.workspaceSlug,
+        count: embedded,
+        docPaths: (msg.embeddedFiles ?? []).filter(
+          (file) => typeof file === "string"
+        ),
+      },
+    })
+    .catch(() => {});
 }
 
 function addSSEConnection(slug, res) {

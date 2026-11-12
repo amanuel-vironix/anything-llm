@@ -7,7 +7,7 @@ const {
   ROLES,
   flexUserRoleValid,
 } = require("../utils/middleware/multiUserProtected");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const {
   validWorkspaceAndThreadSlug,
   validWorkspaceSlug,
@@ -16,6 +16,37 @@ const { writeResponseChunk } = require("../utils/helpers/chat/responses");
 const { WorkspaceThread } = require("../models/workspaceThread");
 const { User } = require("../models/user");
 const { getModelTag } = require("./utils");
+
+/**
+ * One chat.sent row per message. Lengths and counts only: never the message,
+ * the attachments or the answer.
+ */
+async function recordChatSent({
+  response,
+  workspace,
+  thread = null,
+  message,
+  attachments,
+}) {
+  await audit.record(
+    {
+      action: "chat.sent",
+      targetType: "workspace",
+      targetId: workspace?.id,
+      workspaceId: workspace?.id,
+      metadata: {
+        workspaceSlug: workspace?.slug,
+        threadId: thread?.id,
+        provider: workspace?.chatProvider || process.env.LLM_PROVIDER || null,
+        model: workspace?.chatModel || "System Default",
+        messageLength: message.length,
+        attachments: Array.isArray(attachments) ? attachments.length : 0,
+        mode: workspace?.chatMode,
+      },
+    },
+    { response }
+  );
+}
 
 function chatEndpoints(app) {
   if (!app) return;
@@ -83,14 +114,7 @@ function chatEndpoints(app) {
           LLMModel: getModelTag(),
         });
 
-        await EventLogs.logEvent(
-          "sent_chat",
-          {
-            workspaceName: workspace?.name,
-            chatModel: workspace?.chatModel || "System Default",
-          },
-          user?.id
-        );
+        await recordChatSent({ response, workspace, message, attachments });
         response.end();
       } catch (e) {
         console.error(e);
@@ -193,15 +217,13 @@ function chatEndpoints(app) {
           LLMModel: getModelTag(),
         });
 
-        await EventLogs.logEvent(
-          "sent_chat",
-          {
-            workspaceName: workspace.name,
-            thread: thread.name,
-            chatModel: workspace?.chatModel || "System Default",
-          },
-          user?.id
-        );
+        await recordChatSent({
+          response,
+          workspace,
+          thread,
+          message,
+          attachments,
+        });
         response.end();
       } catch (e) {
         console.error(e);
