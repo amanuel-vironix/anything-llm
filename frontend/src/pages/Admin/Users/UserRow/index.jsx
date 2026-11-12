@@ -62,6 +62,19 @@ export default function UserRow({ currUser, user }) {
       >
         <th scope="row" className="px-6 whitespace-nowrap">
           {user.username}
+          {(user.identities || []).map((identity) => (
+            <span
+              key={`${identity.provider}-${identity.email}`}
+              className="block text-[11px] font-normal text-white text-opacity-60"
+              title={
+                identity.lastLoginAt
+                  ? `Last Google sign-in ${moment(identity.lastLoginAt).format("lll")}`
+                  : undefined
+              }
+            >
+              Google: {identity.email || "linked"}
+            </span>
+          ))}
         </th>
         <td className="px-6">{titleCase(user.role)}</td>
         <td className="px-6">{moment(user.createdAt).format("lll")}</td>

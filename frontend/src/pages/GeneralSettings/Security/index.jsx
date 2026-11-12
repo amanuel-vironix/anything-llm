@@ -10,6 +10,7 @@ import CTAButton from "@/components/lib/CTAButton";
 import { useTranslation } from "react-i18next";
 import Toggle from "@/components/lib/Toggle";
 import PasswordInput from "@/components/lib/PasswordInput";
+import GoogleSignIn from "./GoogleSignIn";
 import {
   USERNAME_MIN_LENGTH,
   USERNAME_MAX_LENGTH,
@@ -31,6 +32,7 @@ export default function GeneralSecurity() {
           </p>
         </div>
         <MultiUserMode />
+        <GoogleSignIn />
         <PasswordProtection />
       </div>
     </div>

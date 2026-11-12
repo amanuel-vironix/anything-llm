@@ -2,6 +2,34 @@ import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
 
 const Admin = {
+  // Google (OIDC) sign-in settings - admin only.
+  /** @returns {Promise<Object|null>} the settings with the secret masked, or null when not allowed */
+  oidcSettings: async () => {
+    return await fetch(`${API_BASE}/admin/oidc-settings`, {
+      method: "GET",
+      headers: baseHeaders(),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => res?.settings || null)
+      .catch((e) => {
+        console.error(e);
+        return null;
+      });
+  },
+  /** @returns {Promise<{success: boolean, errors: Object<string, string>}>} */
+  updateOidcSettings: async (data) => {
+    return await fetch(`${API_BASE}/admin/oidc-settings`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify(data),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, errors: { form: e.message } };
+      });
+  },
+
   // User Management
   users: async () => {
     return await fetch(`${API_BASE}/admin/users`, {
