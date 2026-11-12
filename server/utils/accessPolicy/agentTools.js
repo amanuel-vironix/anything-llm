@@ -163,23 +163,39 @@ function isMcpToolAllowed(
 }
 
 /**
- * Read the role defaults setting.
+ * Read the role defaults setting. Fails closed: a database error throws
+ * AccessPolicyError, and an unreadable setting denies every tool to both roles.
  * @returns {Promise<Record<string, {allow: string[]|null, deny: string[]}>>}
  */
 async function getRoleDefaults() {
-  const { SystemSettings } = require("../../models/systemSettings");
-  const raw = await SystemSettings.getValueOrFallback(
-    { label: ROLE_POLICY_SETTING },
-    null
-  );
+  const prisma = require("../prisma");
+  const { AccessPolicyError } = require("./index");
+  let raw;
+  try {
+    const row = await prisma.system_settings.findFirst({
+      where: { label: ROLE_POLICY_SETTING },
+      select: { value: true },
+    });
+    raw = row?.value ?? null;
+  } catch (e) {
+    console.error(e.message);
+    throw new AccessPolicyError(
+      "Could not read the agent tool role defaults. Try again later."
+    );
+  }
   if (!raw) return {};
+  const denyAll = () => ({
+    manager: { allow: [], deny: [] },
+    default: { allow: [], deny: [] },
+  });
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return {};
+    return denyAll();
   }
-  if (!parsed || typeof parsed !== "object") return {};
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return denyAll();
   const out = {};
   for (const role of ["manager", "default"]) {
     if (parsed[role] !== undefined && parsed[role] !== null)

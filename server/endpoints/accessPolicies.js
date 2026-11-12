@@ -199,11 +199,16 @@ function accessPolicyEndpoints(app) {
               .json({ success: false, error: `${role}: ${error}` });
           if (rule) next[role] = rule;
         }
-        await SystemSettings._updateSettings({
+        const saved = await SystemSettings._updateSettings({
           [ROLE_POLICY_SETTING]: Object.keys(next).length
             ? JSON.stringify(next)
             : null,
         });
+        if (!saved?.success)
+          return response.status(500).json({
+            success: false,
+            error: saved?.error || "Could not save the role defaults.",
+          });
         await EventLogs.logEvent(
           "role_default_updated",
           { roles: Object.keys(next) },

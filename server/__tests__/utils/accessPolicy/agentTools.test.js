@@ -148,6 +148,27 @@ describe("resolveToolRuleForUser (SQLite)", () => {
     expect((await resolveToolRuleForUser({ id: admin.id })).rule).toBeNull();
   });
 
+  it("an unreadable role default denies every tool instead of none", async () => {
+    await prisma.system_settings.update({
+      where: { label: ROLE_POLICY_SETTING },
+      data: { value: "{not json" },
+    });
+    const result = await resolveToolRuleForUser({ id: user.id });
+    expect(result.source).toBe("role");
+    expect(filterAgentFunctions(FUNCTIONS, result.rule)).toEqual([]);
+    await setRoleDefaults({ default: { allow: null, deny: ["@@mcp_github"] } });
+  });
+
+  it("a failed read of the role default throws instead of lifting it", async () => {
+    const spy = jest
+      .spyOn(prisma.system_settings, "findFirst")
+      .mockRejectedValueOnce(new Error("db down"));
+    await expect(resolveToolRuleForUser({ id: user.id })).rejects.toMatchObject({
+      name: "AccessPolicyError",
+    });
+    spy.mockRestore();
+  });
+
   it("a team policy with a rule beats the role default", async () => {
     const teamPolicy = await prisma.access_policies.create({
       data: { name: "ops-policy", agent_tools: JSON.stringify({ allow: ["@@mcp_github"], deny: [] }) },
