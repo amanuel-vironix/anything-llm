@@ -57,14 +57,43 @@ const API_ROUTE_ROLES = {
 };
 
 /**
+ * Listed routes that act on the instance-wide document library rather than on a
+ * workspace, so they can't honor a key's workspace scope. A key limited to some
+ * workspaces may not call them, nor any unlisted (admin-only) route.
+ */
+const INSTANCE_WIDE_ROUTES = new Set([
+  "GET /v1/documents",
+  "GET /v1/documents/folder/:folderName",
+  "GET /v1/document/:docName",
+  "POST /v1/document/create-folder",
+  "DELETE /v1/document/remove-folder",
+  "POST /v1/document/move-files",
+  "GET /v1/document/generated-files/:filename",
+]);
+
+/** `METHOD route-pattern` of the request, as keyed in API_ROUTE_ROLES. */
+function apiRouteKey(request) {
+  return `${String(request.method).toUpperCase()} ${request.route?.path}`;
+}
+
+/**
+ * Whether a key limited to some workspaces may call this route: only listed routes
+ * that are not instance-wide.
+ * @param {import("express").Request} request
+ * @returns {boolean}
+ */
+function scopedKeyMayUseRoute(request) {
+  const key = apiRouteKey(request);
+  return key in API_ROUTE_ROLES && !INSTANCE_WIDE_ROUTES.has(key);
+}
+
+/**
  * Owner roles allowed on the request's route. Admin-only when the route is not listed.
  * @param {import("express").Request} request
  * @returns {string[]}
  */
 function apiRolesForRoute(request) {
-  const pattern = request.route?.path;
-  const key = `${String(request.method).toUpperCase()} ${pattern}`;
-  return API_ROUTE_ROLES[key] ?? ["admin"];
+  return API_ROUTE_ROLES[apiRouteKey(request)] ?? ["admin"];
 }
 
 /**
@@ -109,6 +138,16 @@ async function validApiKey(request, response, next) {
       apiKey.user_id ?? null
     );
     response.status(403).json({ error: "This API key has expired." });
+    return;
+  }
+
+  // A workspace-scoped key can't reach admin-only or instance-wide routes, whose
+  // handlers don't apply the scope, whatever its owner's role.
+  if (apiKeyWorkspaceIds(apiKey) && !scopedKeyMayUseRoute(request)) {
+    response.status(403).json({
+      error:
+        "This API key is limited to some workspaces and can't use this endpoint.",
+    });
     return;
   }
 
@@ -245,7 +284,9 @@ function apiKeyOwnThreadsOnly(response) {
 module.exports = {
   validApiKey,
   API_ROUTE_ROLES,
+  INSTANCE_WIDE_ROUTES,
   apiRolesForRoute,
+  scopedKeyMayUseRoute,
   apiKeyUser,
   apiKeyWorkspace,
   apiKeyWorkspaces,

@@ -39,6 +39,7 @@ const { ApiKey } = require("../../../models/apiKeys");
 const { ApiChatHandler } = require("../../../utils/chats/apiChatHandler");
 const {
   API_ROUTE_ROLES,
+  INSTANCE_WIDE_ROUTES,
 } = require("../../../utils/middleware/validApiKey");
 const { captureRoutes } = require("../../helpers/routeHarness");
 
@@ -59,6 +60,7 @@ beforeAll(async () => {
   );
   require("../../../endpoints/api/openai").apiOpenAICompatibleEndpoints(router);
   require("../../../endpoints/api/mcpServers").apiMCPServerEndpoints(router);
+  require("../../../endpoints/api/document").apiDocumentEndpoints(router);
   app.use("/api", router);
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -219,7 +221,7 @@ describe("route role table", () => {
     const capture = (register) =>
       captureRoutes(register).routes.forEach((_, k) => registered.add(k));
     developerEndpointsGroups().forEach(capture);
-    const unknown = Object.keys(API_ROUTE_ROLES).filter(
+    const unknown = [...Object.keys(API_ROUTE_ROLES), ...INSTANCE_WIDE_ROUTES].filter(
       (k) => !registered.has(k)
     );
     expect(unknown).toEqual([]);
@@ -299,6 +301,39 @@ describe("workspace scope", () => {
     });
     expect(chat.status).toBe(400);
     expect(ApiChatHandler.chatSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps a workspace-scoped admin key off admin-only and library-wide routes", async () => {
+    const admin = await makeUser({ role: "admin" });
+    const a = await makeWorkspace();
+    const scoped = await makeKey({
+      user_id: admin.id,
+      workspace_ids: JSON.stringify([a.id]),
+    });
+    for (const route of ["/v1/admin/users", "/v1/documents"]) {
+      const res = await call("GET", route, scoped);
+      expect([route, res.status]).toEqual([route, 403]);
+      expect(res.body.error).toMatch(/limited to some workspaces/);
+    }
+    expect((await call("GET", "/v1/workspaces", scoped)).status).toBe(200);
+    const unscoped = await makeKey({ user_id: admin.id });
+    expect((await call("GET", "/v1/admin/users", unscoped)).status).toBe(200);
+  });
+
+  it("refuses addToWorkspaces outside the key's workspaces before embedding", async () => {
+    const manager = await makeUser({ role: "manager" });
+    const [a, b] = [await makeWorkspace(), await makeWorkspace()];
+    const key = await makeKey({
+      user_id: manager.id,
+      workspace_ids: JSON.stringify([a.id]),
+    });
+    const res = await call("POST", "/v1/document/raw-text", key, {
+      textContent: "secret",
+      metadata: { title: "t" },
+      addToWorkspaces: `${a.slug},${b.slug}`,
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(new RegExp(b.slug));
   });
 });
 
