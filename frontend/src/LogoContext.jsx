@@ -1,8 +1,10 @@
 import { createContext, useEffect, useState } from "react";
-import AnythingLLM from "./media/logo/anything-llm.png";
-import AnythingLLMDark from "./media/logo/anything-llm-dark.png";
-import DefaultLoginLogoLight from "./media/illustrations/login-logo.svg";
-import DefaultLoginLogoDark from "./media/illustrations/login-logo-light.svg";
+// Default branding for this fork is Vironix (docs/theming-vironix.md).
+// "AnythingLLM" names the logo for dark backgrounds, "AnythingLLMDark" the one for light.
+import AnythingLLM from "./media/logo/vironix-logo-on-dark.png";
+import AnythingLLMDark from "./media/logo/vironix-logo-on-light.png";
+import DefaultLoginLogoLight from "./media/logo/vironix-mark-on-dark.png";
+import DefaultLoginLogoDark from "./media/logo/vironix-mark-on-light.png";
 import System from "./models/system";
 
 export const REFETCH_LOGO_EVENT = "refetch-logo";
