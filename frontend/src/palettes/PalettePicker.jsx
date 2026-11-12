@@ -1,5 +1,6 @@
 import { useTheme } from "@/hooks/useTheme";
 import { useTranslation } from "react-i18next";
+import { FALLBACK_PALETTE } from "@/palettes";
 
 /**
  * Lets a user pick a color palette. Picking the instance default clears the
@@ -11,7 +12,7 @@ export default function PalettePicker() {
     useTheme();
   const instanceDefault =
     availablePalettes.find(({ key }) => key === instancePalettes.defaultPalette)
-      ?.key ?? "default";
+      ?.key ?? FALLBACK_PALETTE;
 
   if (instancePalettes.enforced)
     return (
