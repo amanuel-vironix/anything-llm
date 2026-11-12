@@ -2,20 +2,20 @@
 
 Generated from the side-effect ledgers in files 01-08. Do not edit by hand; regenerate after changing a ledger (see README). A row with several classes appears under each.
 
-308 ledger rows.
+317 ledger rows.
 
 | Class | Rows |
 |---|---|
-| [DB](#db) | 112 |
+| [DB](#db) | 114 |
 | [FS](#fs) | 45 |
 | [VEC](#vec) | 10 |
-| [NET](#net) | 53 |
+| [NET](#net) | 55 |
 | [PROC](#proc) | 15 |
 | [WS](#ws) | 10 |
 | [PUSH](#push) | 6 |
 | [ENV](#env) | 14 |
-| [CACHE](#cache) | 27 |
-| [LOG](#log) | 38 |
+| [CACHE](#cache) | 29 |
+| [LOG](#log) | 41 |
 | [TEL](#tel) | 28 |
 | [TIME](#time) | 10 |
 | [OTHER](#other) | 6 |
@@ -46,6 +46,8 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AUTH-43](01-auth-and-users.md) | DB | `browser_extension_api_keys` create/delete | P-AUTH-26/27 | `server/models/browserExtensionApiKey.js:22,79` |  | no LOG |
 | [SE-AUTH-45](01-auth-and-users.md) | DB | `desktop_mobile_devices` create | P-AUTH-28 | `server/models/mobileDevice.js:125` | delete | no LOG |
 | [SE-AUTH-46](01-auth-and-users.md) | DB | `desktop_mobile_devices.approved` / delete | P-AUTH-29 | `server/models/mobileDevice.js:160,192` |  | no LOG |
+| [SE-AUTH-50](01-auth-and-users.md) | DB | `users` create, `user_identities` create/update, `invites` claim, `temporary_auth_tokens` replace | P-AUTH-32 | `server/utils/auth/oidc.js:209-296`; `server/models/userIdentity.js:16-60` | delete user (cascades identity) |  |
+| [SE-AUTH-52](01-auth-and-users.md) | DB | `system_settings.oidc_*` upsert in one transaction | P-AUTH-33 | `server/utils/auth/oidcSettings.js:232-271` | yes | secret encrypted |
 | [SE-CHAT-01](02-workspaces-and-chat.md) | DB | `workspaces`, `workspace_users` | P-CHAT-02 | `workspace.js:221-233` | yes (delete) |  |
 | [SE-CHAT-04](02-workspaces-and-chat.md) | DB | `workspaces` | P-CHAT-03 | `workspace.js:283` | manually |  |
 | [SE-CHAT-05](02-workspaces-and-chat.md) | DB | `prompt_history` | P-CHAT-03 | `promptHistory.js:115` | yes (P-CHAT-07) | stores previous prompt |
@@ -223,6 +225,8 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-DOC-13](03-documents-and-ingestion.md) | NET:embedding-provider / PROC native model | embedder | P-DOC-09, P-DOC-19 | `server/utils/vectorDbProviders/lance/index.js:383` | No | Chunk text leaves the host for remote embedders |
 | [SE-ADMIN-20](06-admin-system-and-runtime.md) | NET:foundry | unload previous model, refresh windows | P-ADMIN-07 | `server/utils/helpers/updateENV.js:967-978` | yes |  |
 | [SE-DOC-10](03-documents-and-ingestion.md) | NET:github/gitlab/gitea/confluence/drupalwiki/paperless | user-supplied base URL | P-DOC-05, P-DOC-07 | `collector/utils/extensions/RepoLoader/GithubRepo/RepoLoader/index.js:135`, `:221`; `collector/utils/extensions/PaperlessNgx/PaperlessNgxLoader/index.js:41`; `collector/utils/extensions/DrupalWiki/DrupalWiki/index.js:239` | No | No IP guard |
+| [SE-AUTH-47](01-auth-and-users.md) | NET:google | OpenID discovery document | P-AUTH-31 | `server/utils/auth/oidc.js:76-107` |  | cached 1 h |
+| [SE-AUTH-49](01-auth-and-users.md) | NET:google | token endpoint (code + PKCE verifier), JWKS | P-AUTH-32 | `server/utils/auth/oidc.js:298` |  |  |
 | [SE-AGENT-23](04-agents-tools-and-automation.md) | NET:google-apps-script | Gmail actions; gated writes at `gmail-create-draft.js:141`, `gmail-create-draft-reply.js:143`, `gmail-update-draft.js:139`, `gmail-delete-draft.js:43`, `gmail-send-draft.js:44`, `gmail-send-email.js:136,167`, `gmail-reply-to-thread.js:134,165`, `gmail-mark-read.js:43`, `gmail-mark-unread.js:43`, `gmail-move-to-trash.js:45`, `gmail-move-to-archive.js:45`, `gmail-move-to-inbox.js:45` | P-AGENT-17 | `gmail/lib.js:330-386` | send: no | reads ungated |
 | [SE-AGENT-25](04-agents-tools-and-automation.md) | NET:google-apps-script | Calendar actions; gated writes `gcal-quick-add.js:52`, `gcal-create-event.js:138`, `gcal-update-event.js:104`, `gcal-set-my-status.js:63` | P-AGENT-18 | `google-calendar/lib.js:126` | partly |  |
 | [SE-ADMIN-26](06-admin-system-and-runtime.md) | NET:huggingface (**unverified** host) | native embedder model download | P-ADMIN-08 | `server/utils/helpers/updateENV.js:1440-1449` | yes |  |
@@ -331,6 +335,8 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 |---|---|---|---|---|---|---|
 | [SE-AUTH-17](01-auth-and-users.md) | CACHE | `UserMetaCache` | P-AUTH-07 | `server/utils/middleware/validatedRequest.js:21,70,109` |  | contents unverified |
 | [SE-AUTH-44](01-auth-and-users.md) | CACHE | `TemporaryMobileDeviceRequests` Map set/delete/sweep | P-AUTH-28 | `server/models/mobileDevice.js:48,72,84-89` |  | in-memory |
+| [SE-AUTH-48](01-auth-and-users.md) | CACHE | in-memory OIDC client | P-AUTH-31 | `server/utils/auth/oidc.js:47,76` |  | reset on settings save |
+| [SE-AUTH-53](01-auth-and-users.md) | CACHE | OIDC client cache reset | P-AUTH-33 | `server/utils/auth/oidc.js:47` |  |  |
 | [SE-CHAT-27](02-workspaces-and-chat.md) | CACHE | router sticky / LLM / notify entries | P-CHAT-12 | `router/index.js:191-207` | n/a | skipped for env-only router |
 | [SE-CHAT-29](02-workspaces-and-chat.md) | CACHE | `workspace_agent_invocations`; attachment/effort maps; init chunk | P-CHAT-14 | `agents.js:75-125` | n/a | map entries can leak |
 | [SE-CHAT-30](02-workspaces-and-chat.md) | CACHE | `routerCache`, sticky, llmCache, lastNotified | P-CHAT-15 | `router/index.js:67-312` | n/a | no TTL on config |
@@ -375,6 +381,9 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AUTH-33](01-auth-and-users.md) | LOG | `user_deleted` | P-AUTH-17 | `server/endpoints/admin.js:146` |  |  |
 | [SE-AUTH-35](01-auth-and-users.md) | LOG | `api_user_deleted` (no actor) | P-AUTH-18 | `server/endpoints/api/admin/index.js:259` |  | create/update not logged |
 | [SE-AUTH-42](01-auth-and-users.md) | LOG | `api_key_created` / `api_key_deleted` | P-AUTH-23/24 | `server/endpoints/system.js:1075,1107`; `server/endpoints/admin.js:531,556` |  |  |
+| [SE-AUTH-51](01-auth-and-users.md) | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | P-AUTH-32 | `server/endpoints/auth/oidc.js:87,112-122,131` |  | email stored in `event_logs` |
+| [SE-AUTH-54](01-auth-and-users.md) | LOG | `oidc_settings_updated` | P-AUTH-33 | `server/endpoints/auth/oidc.js:166` |  |  |
+| [SE-AUTH-55](01-auth-and-users.md) | LOG | `failed_login_password_disabled` | P-AUTH-06 | `server/endpoints/system.js:292` |  |  |
 | [SE-CHAT-03](02-workspaces-and-chat.md) | LOG | `event_logs` `workspace_created` | P-CHAT-02 | `workspaces.js:75` | no |  |
 | [SE-CHAT-06](02-workspaces-and-chat.md) | LOG | `workspace_prompt_changed` (log includes full prompts) | P-CHAT-03 | `workspace.js:547-555` | no |  |
 | [SE-CHAT-10](02-workspaces-and-chat.md) | LOG | `workspace_deleted` | P-CHAT-04 | `workspaces.js:325` | no |  |

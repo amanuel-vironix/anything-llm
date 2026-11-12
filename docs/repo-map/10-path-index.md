@@ -2,7 +2,7 @@
 
 Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerate after changing a domain file (see README).
 
-241 paths across 8 domain files.
+244 paths across 8 domain files.
 
 ## [01-auth-and-users.md](01-auth-and-users.md)
 
@@ -38,6 +38,9 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-AUTH-28](01-auth-and-users.md#p-auth-28--mobile-connect-info-and-device-registration) | Mobile: connect-info and device registration |
 | [P-AUTH-29](01-auth-and-users.md#p-auth-29--mobile-approve-list-delete-and-device-authentication) | Mobile: approve, list, delete, and device authentication |
 | [P-AUTH-30](01-auth-and-users.md#p-auth-30--daily-message-limit-enforcement) | Daily message limit enforcement |
+| [P-AUTH-31](01-auth-and-users.md#p-auth-31--google-oidc-sign-in-start) | Google (OIDC) sign-in: start |
+| [P-AUTH-32](01-auth-and-users.md#p-auth-32--google-oidc-sign-in-callback) | Google (OIDC) sign-in: callback |
+| [P-AUTH-33](01-auth-and-users.md#p-auth-33--google-sign-in-settings) | Google sign-in settings |
 
 ## [02-workspaces-and-chat.md](02-workspaces-and-chat.md)
 

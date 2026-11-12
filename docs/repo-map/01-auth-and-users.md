@@ -30,7 +30,9 @@ This file covers identity, sessions and accounts. That means first-run setup, si
 | `users` | Accounts: `role`, `suspended` (Int 0/1), `dailyMessageLimit`, `seen_recovery_codes`, `pfpFilename`, `bio` | `server/prisma/schema.prisma:61-90` |
 | `invites` | Single-use signup codes with preselected workspaces | `server/prisma/schema.prisma:42-51` |
 | `recovery_codes`, `password_reset_tokens` | Account recovery | `server/prisma/schema.prisma:92-111` |
-| `temporary_auth_tokens` | Simple SSO one-shot login tokens | `server/prisma/schema.prisma:325-335` |
+| `temporary_auth_tokens` | One-shot login tokens: `allm-tat-` (Simple SSO) and `allm-oidc-` (Google sign-in callback) | `server/prisma/schema.prisma`, `server/models/temporaryAuthToken.js:14-17` |
+| `user_identities` | External sign-in identities: `(provider, subject)` unique, `email`, `lastLoginAt`; cascade-deleted with the user | `server/prisma/schema.prisma:97`, `server/models/userIdentity.js` |
+| `system_settings.oidc_*` | Google (OIDC) sign-in settings; `oidc_client_secret` encrypted. Each can be overridden by an `OIDC_*` env variable | `server/utils/auth/oidcSettings.js:37-84` |
 | `api_keys` | Developer API keys. `createdBy` is a bare Int with **no relation** to `users` | `server/prisma/schema.prisma:18-25` |
 | `browser_extension_api_keys` | Extension keys, cascade-deleted with the user | `server/prisma/schema.prisma:314-323` |
 | `desktop_mobile_devices` | Mobile devices, cascade-deleted with the user | `server/prisma/schema.prisma:364-375` |
@@ -52,15 +54,15 @@ This file covers identity, sessions and accounts. That means first-run setup, si
 
 | Invariant | Enforced? | Where |
 |---|---|---|
-| At least one admin exists after a **role change** | Yes, for demotion only | `canModifyAdmin` `server/utils/helpers/admin/index.js:22-38`, called at `server/endpoints/admin.js:112` and `server/endpoints/api/admin/index.js:198` |
-| At least one admin exists after a **delete** | **No** | `server/endpoints/admin.js:129-160` and `server/endpoints/api/admin/index.js:250-262` do not call `canModifyAdmin`. An admin can delete themself or the last admin |
-| At least one **active** admin exists | **No** | `canModifyAdmin` only looks at `role`. Suspending the last admin (even yourself) goes through. `User.count({role: admin})` (`:31`) counts suspended admins too |
-| Admin-count check is atomic | **No** (unverified race) | count then update with no transaction (`server/utils/helpers/admin/index.js:31` then `server/models/user.js:201`) |
+| At least one **active** (unsuspended) admin exists after a role change, suspension or delete | **Yes** (fixed in `238fe3f3`, F-09 / SMF-13) | `User._withActiveAdminGuard` (`server/models/user.js:125-134`) runs the write and then counts `role=admin, suspended=0` in the same transaction, throwing `lastAdminError` when none remain. Used by `User.update` when `removesActiveAdmin` (`:107,287`) and by `User.delete`/`deleteWithReason` (`:401-438`). `canModifyAdmin` (`server/utils/helpers/admin/index.js`) remains as an early, friendlier check. Only the enable-multi-user rollback passes `allowNoActiveAdmin` |
+| Admin-count check is atomic | **Yes** | the guard is write-then-count inside one transaction; tested with concurrent suspends and deletes (`server/__tests__/models/userLastAdminGuard.test.js`) |
 | Managers cannot raise anyone to admin, or touch admins | Yes, in the UI routes | `validRoleSelection`/`validCanModify` `server/utils/helpers/admin/index.js:7-50` |
 | The developer API respects roles | **No.** Any API key acts as a super-admin | `server/endpoints/api/admin/index.js:85-136` (create any role), `:143-208` (update any user) |
 | Usernames are unique and well-formed | Yes | DB unique `server/prisma/schema.prisma:63`. Regex and length checks `server/models/user.js:17,35-50` |
 | Password complexity | Yes, on create, update and reset | `server/models/user.js:115-118,192-196,340-370` (env-driven `PASSWORD*` options) |
-| Suspended users cannot authenticate | Mostly | Blocked in `validatedRequest.js:101`, `system.js:262`, `temporaryAuthToken.js:84`, `validBrowserExtensionApiKey.js:38`, `mobile/middleware/index.js:30,78`. **Not** blocked: API keys created by a suspended admin (`validApiKey.js` never looks at the creator), and password recovery for a suspended user (`PasswordRecovery/index.js:34-71`) |
+| An external identity links to an account only by `(provider, sub)`, never by email | Yes | `user_identities` unique `(provider, subject)`; `linkedUser` (`server/utils/auth/oidc.js:209`). Email is stored for display only |
+| Google sign-in accepts only verified accounts in the allowed Workspace domains | Yes | `checkClaims` (`server/utils/auth/oidc.js:167-184`): `email_verified === true`, exact email domain, and `hd` in the allow list |
+| Suspended users cannot authenticate | Mostly | Blocked in `validatedRequest.js:101`, `system.js:262`, `temporaryAuthToken.js:84`, Google callback (`server/utils/auth/oidc.js:298`, refusal `suspended`), `validBrowserExtensionApiKey.js:38`, `mobile/middleware/index.js:30,78`. **Not** blocked: API keys created by a suspended admin (`validApiKey.js` never looks at the creator), and password recovery for a suspended user (`PasswordRecovery/index.js:34-71`) |
 | Multi-user mode cannot be turned off | Yes (no endpoint exists) | grep for `multi_user_mode` writes: only `server/endpoints/system.js:694,718` |
 
 ```mermaid
@@ -90,7 +92,7 @@ Everything below is mounted on `apiRouter` (`/api` prefix; see `server/index.js:
 | E-AUTH-05 | ui | GET `/system/check-token` | VR | `server/endpoints/system.js:135` | any session |
 | E-AUTH-06 | ui | GET `/system/refresh-user` | VR | `server/endpoints/system.js:165` | any session |
 | E-AUTH-07 | ui | POST `/request-token` | none | `server/endpoints/system.js:205` | anyone |
-| E-AUTH-08 | ui | GET `/request-token/sso/simple?token=` | simpleSSOEnabled | `server/endpoints/system.js:360` | anyone holding a temp token. Needs multi-user mode and `SIMPLE_SSO_ENABLED` |
+| E-AUTH-08 | ui | GET `/request-token/sso/simple?token=` | simpleSSOOrOidcToken | `server/endpoints/system.js:391` | anyone holding a temp token. Needs multi-user mode, plus `SIMPLE_SSO_ENABLED` for `allm-tat-` tokens or Google sign-in enabled for `allm-oidc-` tokens |
 | E-AUTH-09 | ui | POST `/system/recover-account` | isMultiUserSetup | `server/endpoints/system.js:403` | anyone (multi-user only) |
 | E-AUTH-10 | ui | POST `/system/reset-password` | isMultiUserSetup | `server/endpoints/system.js:428` | holder of a reset token |
 | E-AUTH-11 | ui | POST `/system/update-password` | VR | `server/endpoints/system.js:619` | single-user only (returns 401 in multi-user mode, `:625`) |
@@ -139,6 +141,10 @@ Everything below is mounted on `apiRouter` (`/api` prefix; see `server/index.js:
 | E-AUTH-54 | api | DELETE `/v1/admin/invite/:id` | validApiKey | `server/endpoints/api/admin/index.js:374` | same |
 | E-AUTH-55 | ui | (client only) logout | none | `frontend/src/components/UserMenu/UserButton/index.jsx:95-102` | any |
 | E-AUTH-56 | ui | (every protected route) session validation | VR | `server/utils/middleware/validatedRequest.js:8` | n/a |
+| E-AUTH-57 | ui | GET `/auth/oidc/start[?invite=]` | none | `server/endpoints/auth/oidc.js:46` | anyone (Google sign-in enabled, multi-user) |
+| E-AUTH-58 | ui | GET `/auth/oidc/callback` | none (state cookie + `state`/`nonce`/PKCE) | `server/endpoints/auth/oidc.js:68` | the browser returning from Google |
+| E-AUTH-59 | ui | GET `/admin/oidc-settings` | VR, strict[admin] | `server/endpoints/auth/oidc.js:140` | admin |
+| E-AUTH-60 | ui | POST `/admin/oidc-settings` | VR, strict[admin] | `server/endpoints/auth/oidc.js:155` | admin |
 
 ### Role matrix (server-enforced)
 
@@ -243,6 +249,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   4. Unknown user: `dummyHashCompare` and a log, then 200 `[001]` (`:224-242`).
   5. Wrong password: log, then 200 `[001]` (`:244-260`).
   6. Suspended: log, then 200 `[004]` (`:262-278`). The suspension check runs only after the password matches, so suspension is revealed only to someone with the right password.
+  6a. Password sign-in turned off (Google sign-in on with `oidc_password_login_disabled`/`OIDC_ONLY`, `passwordLoginRestricted`, `server/utils/auth/oidcSettings.js:287`) and the user is not an admin: log `failed_login_password_disabled`, then 200 `[006]` (`server/endpoints/system.js:286-306`). Admins keep password sign-in and recovery codes as a break-glass path.
   7. Telemetry and log `login_event` (`:280-293`).
   8. `makeJWT({id,username}, JWT_EXPIRY)` (`:297-300`).
   9. If `!seen_recovery_codes`, `generateRecoveryCodes` creates 4 bcrypt-hashed UUIDs and sets `seen_recovery_codes=true`. The plaintext codes go back in the response (`:301-311`, `server/utils/PasswordRecovery/index.js:10-32`).
@@ -287,7 +294,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Steps:**
   1. GET `/v1/users/:id/issue-auth-token` → validApiKey → simpleSSOEnabled (`server/endpoints/api/userManagement/index.js:67-70`).
   2. `User.get({id})`, 404 if missing (`:105-107`).
-  3. `TemporaryAuthToken.issue(userId)`: deletes that user's existing temp tokens (`server/models/temporaryAuthToken.js:27,52-61`), then creates `allm-tat-<uuid-apikey>` with a 10-minute expiry (`:10,30-38`).
+  3. `TemporaryAuthToken.issue(userId)`: in one transaction, deletes that user's existing temp tokens and creates `allm-tat-<uuid-apikey>` with a 10-minute expiry (`server/models/temporaryAuthToken.js:33-55`). Concurrent issues leave exactly one live token (SMF-32, fixed in `238fe3f3`; `server/__tests__/models/temporaryAuthTokenIssue.test.js`).
   4. Returns `{token, loginPath:"/sso/simple?token=…"}` (`server/endpoints/api/userManagement/index.js:112-115`).
 - **State changes:** `temporary_auth_tokens`: the user's rows are deleted and one row is created.
 - **Side effects:** SE-AUTH-18 (DB). No event log for issuance.
@@ -319,14 +326,14 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Actor and preconditions:** anyone with the code. `/accept-invite/:code` (`frontend/src/main.jsx:62`).
 - **Steps:**
   1. GET `/invite/:code` returns `{code,status}` only when the invite is pending (`server/endpoints/invite.js:12-35`).
-  2. POST `/invite/:code` `{username,password}` → simpleSSOLoginDisabledMiddleware (`:50-53`). The invite must be pending (`:57-63`).
-  3. `User.create({role:"default"})` (`:65-74`).
-  4. `Invite.markClaimed`: `status="claimed"`, `claimedBy`, then adds the user to the invite's workspaces that still exist (`server/models/invite.js:44-75`).
-  5. Log `invite_accepted` (`server/endpoints/invite.js:76-83`).
-  6. The client then logs in through `/request-token` (`frontend/src/pages/Invite/NewUserModal/index.jsx:34`).
+  2. POST `/invite/:code` `{username,password}` → simpleSSOLoginDisabledMiddleware. Returns 403 when password sign-in is turned off (`server/endpoints/invite.js:71`).
+  3. `User.prepareCreate({role:"default"})` validates and hashes without writing (`server/endpoints/invite.js:80`, `server/models/user.js:182`).
+  4. `Invite.claim(code, data)`: one transaction that flips the invite with `updateMany where status="pending"`, requires a count of 1, creates the user and sets `claimedBy` (`server/models/invite.js:60-80`). Workspaces are added afterwards (`_addToInviteWorkspaces`, `:96`).
+  5. Log `invite_accepted`.
+  6. The client then logs in through `/request-token` (`frontend/src/pages/Invite/NewUserModal/index.jsx:34`). The invite page also offers **Sign in with Google**, which claims the invite through P-AUTH-32.
 - **State changes:** `users`: row created. `invites.status: pending → claimed`, `invites.claimedBy: null → userId`. `workspace_users`: rows created.
 - **Side effects:** SE-AUTH-24 (DB `users`, `invites`, `workspace_users`), SE-AUTH-25 (LOG).
-- **Failure and edge paths:** if `markClaimed` fails, its `{success:false}` is ignored. The user exists and **the invite stays pending, so it can be reused** (`server/endpoints/invite.js:76`). Workspace-assignment errors are swallowed (`server/models/invite.js:63-68`). Check-then-claim has a race that maintainers have declared out of scope (`server/endpoints/invite.js:37-49`).
+- **Failure and edge paths:** an invite that is not pending, or was claimed or disabled by a concurrent request, makes the whole transaction roll back: no user is created (SMF-14, fixed in `238fe3f3`; `server/__tests__/endpoints/inviteClaim.test.js`). Workspace-assignment errors are still swallowed.
 - **Notes:** the route does not check multi-user mode. The role is hard-coded to `default`.
 
 ### P-AUTH-14 — List and disable invites
@@ -353,8 +360,8 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   1. `UserRow` suspend toggle (`frontend/src/pages/Admin/Users/UserRow/index.jsx:29`) or `EditUserModal` (`.../EditUserModal/index.jsx:46`) → POST `/admin/user/:id` → VR → strict[admin,manager] (`server/endpoints/admin.js:88-91`).
   2. `validCanModify(curr, target)` (`server/utils/helpers/admin/index.js:40-50`).
   3. `validRoleSelection` (`:7-18`).
-  4. `canModifyAdmin` (`:22-38`).
-  5. `User.update(id, body)` (`server/models/user.js:157-222`): drops non-`writable` keys, casts, validates, checks password complexity and hashes, runs `prisma.users.update`, logs `user_updated` with a diff that leaves out the password.
+  4. `canModifyAdmin` (early check; counts other **active** admins and handles `suspended`).
+  5. `User.update(id, body)` (`server/models/user.js:238-315`): drops non-`writable` keys, casts, validates, checks password complexity and hashes, runs `prisma.users.update` (inside `_withActiveAdminGuard` when the change demotes or suspends an active admin), logs `user_updated` with a diff that leaves out the password.
 - **Reads:** `users` (target and count of admins).
 - **State changes:** any of `users.role`, `users.suspended` (0 to 1 or back), `users.dailyMessageLimit`, `users.password`, `users.username`, `users.bio`, `users.pfpFilename`.
 - **Side effects:** SE-AUTH-30 (DB), SE-AUTH-31 (LOG `user_updated`).
@@ -367,22 +374,21 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   - `dailyMessageLimit` omitted is fine. An explicit `undefined` cast gives `NaN`, which throws.
   - Suspension takes effect at the next VR call. Existing tokens are not revoked, and unsuspending restores them.
   - A manager can suspend or delete **other managers, and themself**.
-  - An admin can suspend themself or the last admin, which locks out administration.
+  - Suspending or demoting the last active admin is refused with "No active system admins will remain if you do this." (F-09, fixed in `238fe3f3`).
   - An admin can set another user's password without knowing the old one, and that user's existing sessions continue.
 
 ### P-AUTH-17 — Admin or manager deletes a user
 - **Steps:**
   1. `UserRow` (`frontend/src/pages/Admin/Users/UserRow/index.jsx:49`) → DELETE `/admin/user/:id` → VR → strict[admin,manager] (`server/endpoints/admin.js:129-132`).
   2. `validCanModify` (`:138-142`).
-  3. `BrowserExtensionApiKey.deleteAllForUser` (`:144`).
-  4. `User.delete({id})`, a transaction that sets the user's `workspace_chats` to `user_id=null, include=false` and deletes the user (`server/models/user.js:311-325`).
-  5. Log `user_deleted` (`server/endpoints/admin.js:146-153`).
+  3. `User.deleteWithReason({id})`, a transaction that sets the user's `workspace_chats` to `user_id=null, include=false` and deletes the user, guarded by `_withActiveAdminGuard` when the target is an active admin (`server/models/user.js:414-438`, `server/endpoints/admin.js:152`). A refusal returns `{success:false,error}`.
+  4. `BrowserExtensionApiKey.deleteAllForUser`, only after the delete succeeded.
+  5. Log `user_deleted`.
 - **State changes:** `users`: row deleted. `workspace_chats.user_id: id → null`, `include: * → false`. Cascades (`server/prisma/schema.prisma`): `recovery_codes`, `password_reset_tokens`, `temporary_auth_tokens`, `browser_extension_api_keys`, `desktop_mobile_devices`, `workspace_threads`, `workspace_users`, `slash_command_presets`, `system_prompt_variables`, `workspace_parsed_files`, `memories`, `workspace_agent_invocations`: rows deleted.
 - **Side effects:** SE-AUTH-32 (DB), SE-AUTH-33 (LOG).
 - **Failure and edge paths:**
-  - No `canModifyAdmin`, so **the last admin, or the caller themself, can be deleted**.
-  - If the target id does not exist and the caller is an admin, the deletes run as no-ops and `user.username` throws, giving a 500 (`:149`).
-  - `User.delete` returns false on error and the handler ignores it, so it reports success (`:145,154`).
+  - Deleting the last active admin is refused (F-09 / SMF-13, fixed in `238fe3f3`; `server/__tests__/models/userLastAdminGuard.test.js`). The developer API delete (`server/endpoints/api/admin/index.js:258`) uses the same guard.
+  - A failed delete is now reported as `{success:false,error}` instead of success.
 - **Notes:**
   - `api_keys` created by the user are **not** deleted (no relation, `server/prisma/schema.prisma:18-25`).
   - The profile-picture file is not deleted.
@@ -400,7 +406,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **State changes:** as in P-AUTH-15..17 and P-AUTH-12/14.
 - **Side effects:** SE-AUTH-34 (DB), SE-AUTH-35 (LOG, deletes only).
 - **Failure and edge paths:** DELETE with an unknown id throws on `user.id`, giving a 500 (`:257-258`). POST update with an unknown id and `role` throws in `canModifyAdmin`, giving a 500.
-- **Notes:** the API delete path does **not** call `BrowserExtensionApiKey.deleteAllForUser`, although the schema cascade removes those keys anyway. Neither path enforces the last-admin rule on delete.
+- **Notes:** the API delete path does **not** call `BrowserExtensionApiKey.deleteAllForUser`, although the schema cascade removes those keys anyway. Both delete paths now enforce the last-active-admin rule.
 
 ### P-AUTH-19 — User updates their own profile
 - **Actor and preconditions:** multi-user, any role. `AccountModal` (`frontend/src/components/UserMenu/AccountModal/index.jsx:72`).
@@ -441,15 +447,14 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Steps:**
   1. POST `/system/reset-password` `{token,newPassword,confirmPassword}` (`server/endpoints/system.js:428-450`).
   2. `resetPassword`: trim, then throw on empty or mismatch (`server/utils/PasswordRecovery/index.js:74-77`).
-  3. Look up the token and check expiry (`:79-84`).
-  4. `User.update(password)` (`:87-89`).
-  5. **Unconditionally** `User._update(seen_recovery_codes:false)` (`:93-95`).
-  6. On success, delete all of the user's reset tokens and recovery codes (`:97-99`).
+  3. Look up the token, check expiry, and check password complexity **before any write**.
+  4. One transaction (`server/utils/PasswordRecovery/index.js:102-115`): consume the token with a conditional `deleteMany` (by id, `expiresAt >= now`, count must be 1), set the new password and `seen_recovery_codes=false`, then delete the user's other reset tokens and recovery codes.
+  5. Log `user_updated` with `changes:{}` (no password).
 - **State changes:** `users.password: old → new`. `users.seen_recovery_codes: true → false`. `password_reset_tokens` and `recovery_codes`: rows deleted.
 - **Side effects:** SE-AUTH-40 (DB), SE-AUTH-31 (LOG `user_updated`, which records the change without the password).
 - **Failure and edge paths:**
   - Empty or mismatched passwords throw, so the endpoint returns **500** with the message (`server/endpoints/system.js:445-447`), not 400.
-  - **Bug:** if `User.update` fails (for example a complexity failure), `seen_recovery_codes` has already been set to false (`:93`) while the old codes and the token remain. The next login then calls `generateRecoveryCodes`, which **adds** 4 more codes. The user ends up with 8 valid codes, and the old ones still work.
+  - A rejected password (complexity) leaves the token, the recovery codes and `seen_recovery_codes` untouched. Two concurrent resets with one token: only one succeeds (F-10 / SMF-15, fixed in `238fe3f3`; `server/__tests__/utils/PasswordRecovery/resetPassword.test.js`). Recovery is still unlogged and not rate limited (F-08).
 - **Notes:** existing JWTs survive a password reset.
 
 ### P-AUTH-23 — Developer API keys, single-user mode
@@ -519,6 +524,43 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **State changes:** none (read-only).
 - **Notes:** the window is a rolling 24 hours, not a calendar day. Hidden (`include=false`) chats still count, deliberately so (`server/endpoints/workspaceThreads.js:209-210`). **Mobile is a bypass** for limited users. Managers are limited, and only admins are exempt.
 
+### P-AUTH-31 — Google (OIDC) sign-in: start
+- **Actor and preconditions:** anyone. Multi-user mode and Google sign-in enabled (`getOidcSettings`, `server/utils/auth/oidcSettings.js:158`). Login page or invite page **Sign in with Google** (`frontend/src/components/Modals/Password/GoogleSignInButton.jsx:45`).
+- **Steps:**
+  1. GET `/auth/oidc/start[?invite=<code>]` (`server/endpoints/auth/oidc.js:46`).
+  2. `startSignIn` (`server/utils/auth/oidc.js:109-133`): discover the issuer (client cached 1 h, `:76-107`), generate `state`, `nonce` and a PKCE verifier, sign them (with the invite code) into a JWT (audience `anythingllm-oidc-state`, 10 min).
+  3. Set the `allm_oidc` cookie (httpOnly, `sameSite=lax`, path `/api/auth/oidc`, `secure` when the redirect URI is https; `stateCookieOptions`, `:135`) and redirect to Google's authorization URL with `scope=openid email profile`, S256 PKCE.
+- **Reads:** `system_settings.oidc_*`, env overrides.
+- **State changes:** browser cookie only.
+- **Side effects:** SE-AUTH-47 (NET:google discovery), SE-AUTH-48 (CACHE client).
+- **Failure and edge paths:** disabled or misconfigured: redirect to `/login?sso_error=<reason>`.
+
+### P-AUTH-32 — Google (OIDC) sign-in: callback
+- **Actor and preconditions:** the browser returning from Google with `code` and `state`, and the `allm_oidc` cookie.
+- **Steps:**
+  1. GET `/auth/oidc/callback` (`server/endpoints/auth/oidc.js:68`) → `completeSignIn` (`server/utils/auth/oidc.js:298`).
+  2. Verify the state cookie's signature and audience, and that `state` matches. Exchange the code at the token endpoint with the PKCE verifier; `openid-client` verifies the ID token's signature (JWKS), `iss`, `aud`, `exp`, `iat` and `nonce`.
+  3. `checkClaims` (`:167-184`): `email_verified === true`; email domain exactly in the allow list; `hd` in the allow list.
+  4. Look up `user_identities` by `(provider, sub)` (`linkedUser`, `:209`). Linked: refuse a suspended user; update `email`/`lastLoginAt` (`UserIdentity.recordLogin`).
+  5. Not linked: with an invite code, `claimInviteWithIdentity` (`:259`) claims it through `Invite.claim` and creates the identity in the same transaction. Otherwise, `auto` provisioning creates a user (role from `oidc_default_role`, never admin; username = email, `.2`, `.3`… on collision; unusable random password) and its identity (`createUserWithIdentity`, `:221`, which retries on a concurrent insert and re-finds the identity). `invite_only` refuses.
+  6. `TemporaryAuthToken.issue(userId, {prefix: "allm-oidc-"})` (one retry on a busy DB), log `login_event` `{method:"oidc"}` (and `user_created_oidc` for new users), clear the cookie and redirect to `<appBaseUrl>/sso/simple?token=…`. `appBaseUrl` comes from `OIDC_APP_URL` or the redirect URI's origin, never from request headers (`:66`).
+  7. The SSO page exchanges the token at `/request-token/sso/simple` (P-AUTH-11), which re-signs the session JWT with `OIDC_SESSION_EXPIRY` (default `12h`, `server/endpoints/system.js:391-404`).
+- **Reads:** `system_settings.oidc_*`, `user_identities`, `users`, `invites`.
+- **State changes:** `users` row created (auto/invite); `user_identities` row created or `lastLoginAt`/`email` updated; `invites.status: pending → claimed`; `temporary_auth_tokens` replaced.
+- **Side effects:** SE-AUTH-49 (NET:google token + JWKS), SE-AUTH-50 (DB), SE-AUTH-51 (LOG).
+- **Failure and edge paths:** every refusal (`REFUSALS`, `server/utils/auth/oidc.js:30`: state, provider error, token verification, unverified email, domain, `hd`, no account, suspended, invite invalid, disabled) logs `failed_login_oidc` with `reason`, the email when known, and a detail, then redirects to `/login?sso_error=<reason>`. Two concurrent first sign-ins of the same Google account create one user (`server/__tests__/endpoints/oidc.test.js`).
+- **Notes:** an existing password account with the same email is **not** linked; a separate account is created. Linking from the account menu is not built.
+
+### P-AUTH-33 — Google sign-in settings
+- **Actor and preconditions:** multi-user admin. Settings → Security → Google sign-in (`frontend/src/pages/GeneralSettings/Security/GoogleSignIn.jsx`).
+- **Steps:**
+  - GET `/admin/oidc-settings` → `oidcSettingsForDisplay` (secret masked, `envOverrides` listed; `server/utils/auth/oidcSettings.js:273`).
+  - POST `/admin/oidc-settings` → `saveOidcSettings` (`:232-271`): merge with stored values (a masked secret keeps the stored one), apply env overrides, `validateOidcSettings` (`:185`: https URLs or http on localhost, domain syntax, provisioning mode, role `default`/`manager`, password-off only with sign-in on, multi-user required) **before any write**; then upsert every label in one `$transaction`, reset the client cache, and log `oidc_settings_updated`.
+- **State changes:** `system_settings.oidc_*` rows upserted (secret encrypted with `EncryptionManager`).
+- **Side effects:** SE-AUTH-52 (DB), SE-AUTH-53 (CACHE), SE-AUTH-54 (LOG).
+- **Failure and edge paths:** any invalid field returns `{success:false, errors:{field: message}}` and writes nothing (`server/__tests__/utils/auth/oidcSettings.test.js`). Not stored through `updateENV`.
+- **Notes:** `/setup-complete` exposes only `OidcEnabled` and `OidcPasswordLoginDisabled` (`server/models/systemSettings.js`, `oidcPublicSettings`).
+
 ---
 
 ## 5. State machines
@@ -544,11 +586,12 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 | active or suspended | deleted | DELETE `/admin/user/:id`, `/v1/admin/users/:id`, enable-multi-user rollback (deletes all) | `server/models/user.js:311-325` |
 | role default ↔ manager ↔ admin | — | update with `role` (guards in `server/utils/helpers/admin/index.js`) | `server/endpoints/admin.js:88-127` |
 | `seen_recovery_codes` false → true | — | first successful password login | `server/utils/PasswordRecovery/index.js:26-28` |
-| `seen_recovery_codes` true → false | — | any password-reset attempt that reaches `:93`, even a failed one | `server/utils/PasswordRecovery/index.js:93-95` |
+| `seen_recovery_codes` true → false | — | a successful password reset only (same transaction as the password write; fixed in `238fe3f3`) | `server/utils/PasswordRecovery/index.js:102-115` |
+| none | active, with a linked `user_identities` row | first Google sign-in (`auto`) or Google invite claim | `server/utils/auth/oidc.js:221,259` |
 
 ### Session JWT (multi-user)
 issued (`server/endpoints/system.js:297`, `server/models/temporaryAuthToken.js:87`), then validated on every request (`server/utils/middleware/validatedRequest.js:85-106`), then one of:
-- **expired** (`JWT_EXPIRY`, default 30d)
+- **expired** (`JWT_EXPIRY`, default 30d; sessions started with Google use `OIDC_SESSION_EXPIRY`, default 12h)
 - **rejected**: user deleted, or `JWT_SECRET` rotated
 - **blocked while suspended**, which reverts to valid on unsuspend
 
@@ -558,14 +601,17 @@ There is no revoked state. Logout is client-only.
 issued with an encrypted `p` (`server/endpoints/system.js:345-351`), then validated against the current `AUTH_TOKEN` on each request. It is rejected once the password changes or `JWT_SECRET` rotates (`:651`). After the password is removed or multi-user mode is enabled it becomes irrelevant (multi-user mode rejects it because it has no `id`).
 
 ### Simple SSO temporary token
-issued (deletes the user's previous tokens) → consumed (deleted on *any* lookup that finds the row) | expired (10 min, checked at validate; expired rows linger until the next issue for that user or a lookup) (`server/models/temporaryAuthToken.js:24-101`).
+issued (deletes the user's previous tokens in the same transaction, so at most one live token per user) → consumed (deleted on *any* lookup that finds the row) | expired (10 min, checked at validate; expired rows linger until the next issue for that user or a lookup) (`server/models/temporaryAuthToken.js`). Tokens with the `allm-oidc-` prefix are accepted only while Google sign-in is enabled; `allm-tat-` tokens only while Simple SSO is (`server/utils/middleware/simpleSSOEnabled.js`).
+
+### Google sign-in state cookie
+issued at start (10 min JWT in `allm_oidc`) → cleared at the callback, success or refusal. A callback without it, with a different `state`, or after expiry is refused with `state`.
 
 ### Recovery codes and reset token
 - Codes: created (4) at first login → deleted on a successful reset. They are never consumed by `recover-account`.
 - Reset token: created (10 min) → deleted on a successful reset. Otherwise it expires and lingers. Several can exist at once (`server/models/passwordRecovery.js:72-109`).
 
 ### Invite
-`pending` → `claimed` (accept, `server/models/invite.js:44-49`) or `disabled` (deactivate, `:26-37`). `claimed` → `disabled` is also possible through deactivate. There is no expiry.
+`pending` → `claimed` (accept by password or Google, a conditional `updateMany where status="pending"` in the same transaction as the user insert, `server/models/invite.js:60-80`) or `disabled` (deactivate, `:26-37`). `claimed` → `disabled` is also possible through deactivate. There is no expiry.
 
 ### Developer API key / browser extension key
 created → deleted. Neither expires. Browser keys are also deleted by user delete (`server/endpoints/admin.js:144` plus the cascade), by disconnect, and by the enable-multi-user rollback cascade.
@@ -626,6 +672,15 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 | SE-AUTH-44 | P-AUTH-28 | CACHE | `TemporaryMobileDeviceRequests` Map set/delete/sweep | `server/models/mobileDevice.js:48,72,84-89` | | in-memory |
 | SE-AUTH-45 | P-AUTH-28 | DB | `desktop_mobile_devices` create | `server/models/mobileDevice.js:125` | delete | no LOG |
 | SE-AUTH-46 | P-AUTH-29 | DB | `desktop_mobile_devices.approved` / delete | `server/models/mobileDevice.js:160,192` | | no LOG |
+| SE-AUTH-47 | P-AUTH-31 | NET:google | OpenID discovery document | `server/utils/auth/oidc.js:76-107` | | cached 1 h |
+| SE-AUTH-48 | P-AUTH-31 | CACHE | in-memory OIDC client | `server/utils/auth/oidc.js:47,76` | | reset on settings save |
+| SE-AUTH-49 | P-AUTH-32 | NET:google | token endpoint (code + PKCE verifier), JWKS | `server/utils/auth/oidc.js:298` | | |
+| SE-AUTH-50 | P-AUTH-32 | DB | `users` create, `user_identities` create/update, `invites` claim, `temporary_auth_tokens` replace | `server/utils/auth/oidc.js:209-296`; `server/models/userIdentity.js:16-60` | delete user (cascades identity) | |
+| SE-AUTH-51 | P-AUTH-32 | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | `server/endpoints/auth/oidc.js:87,112-122,131` | | email stored in `event_logs` |
+| SE-AUTH-52 | P-AUTH-33 | DB | `system_settings.oidc_*` upsert in one transaction | `server/utils/auth/oidcSettings.js:232-271` | yes | secret encrypted |
+| SE-AUTH-53 | P-AUTH-33 | CACHE | OIDC client cache reset | `server/utils/auth/oidc.js:47` | | |
+| SE-AUTH-54 | P-AUTH-33 | LOG | `oidc_settings_updated` | `server/endpoints/auth/oidc.js:166` | | |
+| SE-AUTH-55 | P-AUTH-06 | LOG | `failed_login_password_disabled` | `server/endpoints/system.js:292` | | |
 
 ---
 
@@ -647,7 +702,7 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 3. What `UserMetaCache.setFromRequest` stores (`server/utils/userLocale`, not read).
 4. Whether `Telemetry.sendTelemetry` is a no-op when `DISABLE_TELEMETRY=true`. `connect()` was not read beyond `server/models/telemetry.js:89-109`.
 5. Whether Telegram, embed or developer API chat paths call `canSendChat`. Only the grep result was checked: no calls outside the six sites listed in P-AUTH-30.
-6. The race in `canModifyAdmin` (count-then-update with no transaction) is inferred, not demonstrated.
+6. The race in `canModifyAdmin` (count-then-update with no transaction) was demonstrated by tests and fixed in `238fe3f3` with a write-then-count guard in one transaction.
 7. `EncryptionManager` key source and rotation (`server/utils/EncryptionManager`, not read). The comment at `server/utils/middleware/validatedRequest.js:53-57` says it is persistent.
 8. Whether the frontend renders or ever uses the leaked `user.password` hash in the browser-extension key list (P-AUTH-26). The server response includes it either way.
 9. Whether `JWT_SECRET` from `docker/.env.example` (commented out) means a fresh Docker install runs in single-user open mode until a password is set. Consistent with `server/utils/middleware/validatedRequest.js:16-24`, but deployment defaults were not checked.
