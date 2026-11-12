@@ -12,7 +12,7 @@ const {
   viewLocalFiles,
 } = require("../../../utils/files");
 const { reqBody, safeJsonParse, queryParams } = require("../../../utils/http");
-const { EventLogs } = require("../../../models/eventLogs");
+const { audit } = require("../../../utils/audit");
 const { CollectorApi } = require("../../../utils/collectorApi");
 const fs = require("fs");
 const path = require("path");
@@ -44,6 +44,34 @@ function validateWorkspaceSlugQuery(request, response, next) {
       .end();
   }
   next();
+}
+
+/**
+ * Fields of a document.uploaded event for a processed upload (names and counts only).
+ * @param {{docName?: string, documents?: Object[], via: string}} upload
+ */
+function uploadedFields({ docName, documents = [], via }) {
+  return {
+    targetType: "document",
+    targetId: documents[0]?.id,
+    metadata: { docName, count: documents.length, via },
+  };
+}
+
+/**
+ * Fields of a document.embedded event after documents were added to workspaces.
+ * @param {string} workspaceSlugs - comma-separated slugs
+ * @param {Object[]} documents
+ */
+function embeddedFields(workspaceSlugs, documents = []) {
+  return {
+    targetType: "workspace",
+    targetId: String(workspaceSlugs),
+    metadata: {
+      count: documents.length,
+      docPaths: documents.map((document) => document.location),
+    },
+  };
 }
 
 function apiDocumentEndpoints(app) {
@@ -158,9 +186,17 @@ function apiDocumentEndpoints(app) {
           `Document ${originalname} uploaded processed and successfully. It is now available in documents.`
         );
         await Telemetry.sendTelemetry("document_uploaded");
-        await EventLogs.logEvent("api_document_uploaded", {
-          documentName: originalname,
-        });
+        await audit.record(
+          {
+            action: "document.uploaded",
+            ...uploadedFields({
+              docName: originalname,
+              documents,
+              via: "api",
+            }),
+          },
+          { response }
+        );
 
         if (!!addToWorkspaces) {
           const embedded = await Document.api.uploadToWorkspace(
@@ -171,6 +207,13 @@ function apiDocumentEndpoints(app) {
             return response
               .status(embedded.partial ? 200 : 500)
               .json({ success: false, error: embedded.error, documents });
+          await audit.record(
+            {
+              action: "document.embedded",
+              ...embeddedFields(addToWorkspaces, documents),
+            },
+            { response }
+          );
         }
         response.status(200).json({ success: true, error: null, documents });
       } catch (e) {
@@ -312,10 +355,17 @@ function apiDocumentEndpoints(app) {
         );
 
         await Telemetry.sendTelemetry("document_uploaded");
-        await EventLogs.logEvent("api_document_uploaded", {
-          documentName: originalname,
-          folder,
-        });
+        await audit.record(
+          {
+            action: "document.uploaded",
+            ...uploadedFields({
+              docName: originalname,
+              documents,
+              via: "api",
+            }),
+          },
+          { response }
+        );
 
         if (!!addToWorkspaces) {
           const embedded = await Document.api.uploadToWorkspace(
@@ -326,6 +376,13 @@ function apiDocumentEndpoints(app) {
             return response
               .status(embedded.partial ? 200 : 500)
               .json({ success: false, error: embedded.error, documents });
+          await audit.record(
+            {
+              action: "document.embedded",
+              ...embeddedFields(addToWorkspaces, documents),
+            },
+            { response }
+          );
         }
         response.status(200).json({ success: true, error: null, documents });
       } catch (e) {
@@ -472,7 +529,21 @@ function apiDocumentEndpoints(app) {
             `Link ${url} uploaded processed and successfully. It is now available in documents.`
           );
           await Telemetry.sendTelemetry("link_uploaded");
-          await EventLogs.logEvent("api_link_uploaded", { link: url });
+          let linkHost = null;
+          try {
+            linkHost = new URL(url).host;
+          } catch {}
+          await audit.record(
+            {
+              action: "document.uploaded",
+              ...uploadedFields({
+                docName: linkHost,
+                documents: linkDocuments,
+                via: "link",
+              }),
+            },
+            { response }
+          );
           documents.push(...linkDocuments);
         }
 
@@ -481,6 +552,14 @@ function apiDocumentEndpoints(app) {
           embedded = await Document.api.uploadToWorkspace(
             addToWorkspaces,
             documents.map((document) => document.location)
+          );
+        if (!!addToWorkspaces && documents.length > 0 && embedded.success)
+          await audit.record(
+            {
+              action: "document.embedded",
+              ...embeddedFields(addToWorkspaces, documents),
+            },
+            { response }
           );
 
         const linkError =
@@ -646,7 +725,13 @@ function apiDocumentEndpoints(app) {
           `Document created successfully. It is now available in documents.`
         );
         await Telemetry.sendTelemetry("raw_document_uploaded");
-        await EventLogs.logEvent("api_raw_document_uploaded");
+        await audit.record(
+          {
+            action: "document.uploaded",
+            ...uploadedFields({ documents, via: "raw_text" }),
+          },
+          { response }
+        );
 
         if (!!addToWorkspaces) {
           const embedded = await Document.api.uploadToWorkspace(
@@ -657,6 +742,13 @@ function apiDocumentEndpoints(app) {
             return response
               .status(embedded.partial ? 200 : 500)
               .json({ success: false, error: embedded.error, documents });
+          await audit.record(
+            {
+              action: "document.embedded",
+              ...embeddedFields(addToWorkspaces, documents),
+            },
+            { response }
+          );
         }
         response.status(200).json({ success: true, error: null, documents });
       } catch (e) {
@@ -964,6 +1056,15 @@ function apiDocumentEndpoints(app) {
         response.sendStatus(404).end();
         return;
       }
+      await audit.record(
+        {
+          action: "document.viewed",
+          targetType: "document",
+          targetId: document.id,
+          metadata: { docName: String(docName) },
+        },
+        { response }
+      );
       response.status(200).json({ document });
     } catch (e) {
       console.error(e.message, e);
@@ -1091,6 +1192,18 @@ function apiDocumentEndpoints(app) {
       try {
         const { name } = reqBody(request);
         await purgeFolder(name);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "document.deleted",
+              targetType: "folder",
+              targetId: String(name),
+              metadata: { docName: String(name) },
+            },
+            response
+          ))
+        )
+          return;
         response
           .status(200)
           .json({ success: true, message: "Folder removed successfully" });
@@ -1296,6 +1409,15 @@ function apiDocumentEndpoints(app) {
             `attachment; filename="${createFilesLib.sanitizeFilenameForHeader(filename)}"`
           );
           response.setHeader("Content-Length", imageBuffer.length);
+          await audit.record(
+            {
+              action: "document.downloaded",
+              targetType: "generated_file",
+              targetId: filename,
+              metadata: { docName: filename, kind: "generated_image" },
+            },
+            { response }
+          );
           response.send(imageBuffer);
           Telemetry.sendTelemetry("agent_generated_file_downloaded", {
             type: "image/png",
@@ -1323,6 +1445,15 @@ function apiDocumentEndpoints(app) {
           `attachment; filename="${safeFilename}"`
         );
         response.setHeader("Content-Length", fileData.buffer.length);
+        await audit.record(
+          {
+            action: "document.downloaded",
+            targetType: "generated_file",
+            targetId: filename,
+            metadata: { docName: filename, kind: "generated_file" },
+          },
+          { response }
+        );
         response.send(fileData.buffer);
 
         Telemetry.sendTelemetry("agent_generated_file_downloaded", {

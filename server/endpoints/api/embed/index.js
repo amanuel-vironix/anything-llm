@@ -3,6 +3,7 @@ const { EmbedChats } = require("../../../models/embedChats");
 const { validApiKey } = require("../../../utils/middleware/validApiKey");
 const { reqBody } = require("../../../utils/http");
 const { Workspace } = require("../../../models/workspace");
+const { audit } = require("../../../utils/audit");
 
 function apiEmbedEndpoints(app) {
   if (!app) return;
@@ -129,6 +130,18 @@ function apiEmbedEndpoints(app) {
         const chats = await EmbedChats.where({
           embed_config: { uuid: String(embedUuid) },
         });
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.viewed_other_user",
+              targetType: "embed",
+              targetId: String(embedUuid),
+              metadata: { count: chats.length, filter: "embed" },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ chats });
       } catch (e) {
         console.error(e.message, e);
@@ -190,6 +203,18 @@ function apiEmbedEndpoints(app) {
           embed_config: { uuid: String(embedUuid) },
           session_id: String(sessionUuid),
         });
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.viewed_other_user",
+              targetType: "embed",
+              targetId: String(embedUuid),
+              metadata: { count: chats.length, filter: "embed_session" },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ chats });
       } catch (e) {
         console.error(e.message, e);
@@ -277,6 +302,24 @@ function apiEmbedEndpoints(app) {
         workspace_id: workspace.id,
       });
 
+      if (embed) {
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "embed.created",
+              targetType: "embed",
+              targetId: embed.id,
+              workspaceId: workspace.id,
+              metadata: {
+                embedUuid: embed.uuid,
+                workspaceSlug: workspace.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
+      }
       response.status(200).json({ embed, error });
     } catch (e) {
       console.error(e.message, e);
@@ -347,6 +390,24 @@ function apiEmbedEndpoints(app) {
       }
 
       const { success, error } = await EmbedConfig.update(embed.id, data);
+      if (
+        !(await audit.recordOrFail(
+          {
+            action: "embed.updated",
+            outcome: success ? "success" : "failed",
+            reason: success ? undefined : "update_failed",
+            targetType: "embed",
+            targetId: embed.id,
+            workspaceId: embed.workspace_id,
+            metadata: {
+              embedUuid: embed.uuid,
+              changedFields: Object.keys(data || {}),
+            },
+          },
+          response
+        ))
+      )
+        return;
       response.status(200).json({ success, error });
     } catch (e) {
       console.error(e.message, e);
@@ -395,6 +456,21 @@ function apiEmbedEndpoints(app) {
         if (!embed)
           return response.status(404).json({ error: "Embed not found" });
         const success = await EmbedConfig.delete({ id: embed.id });
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "embed.deleted",
+              outcome: success ? "success" : "failed",
+              reason: success ? undefined : "delete_failed",
+              targetType: "embed",
+              targetId: embed.id,
+              workspaceId: embed.workspace_id,
+              metadata: { embedUuid: embed.uuid },
+            },
+            response
+          ))
+        )
+          return;
         response
           .status(200)
           .json({ success, error: success ? null : "Failed to delete embed" });
