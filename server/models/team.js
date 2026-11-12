@@ -237,7 +237,26 @@ const Team = {
         { team: { members: { none: { user_id: { not: user_id } } } } },
       ];
     try {
-      const { count } = await prisma.team_members.deleteMany({ where });
+      // The leaver's shared presets go back to them in the same transaction, so
+      // the old team stops seeing (and its leads stop editing) them. A shared
+      // preset with a personal twin is dropped, as in Team.delete.
+      const count = await prisma.$transaction(async (tx) => {
+        const removed = await tx.team_members.deleteMany({ where });
+        if (removed.count !== 1) return removed.count;
+        await tx.$executeRaw`DELETE FROM slash_command_presets
+          WHERE team_id = ${team_id} AND uid = ${user_id}
+          AND EXISTS (
+            SELECT 1 FROM slash_command_presets AS personal
+            WHERE personal.uid = slash_command_presets.uid
+            AND personal.team_id = 0
+            AND personal.command = slash_command_presets.command
+          )`;
+        await tx.slash_command_presets.updateMany({
+          where: { team_id, uid: user_id },
+          data: { team_id: 0 },
+        });
+        return removed.count;
+      });
       if (count === 1) return { success: true, error: null };
       const exists = await prisma.team_members.findFirst({
         where: { team_id, user_id },

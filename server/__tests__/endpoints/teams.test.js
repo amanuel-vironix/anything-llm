@@ -183,7 +183,7 @@ describe("team lead permissions (AC 33)", () => {
     await Team.addMember(team.id, member.id);
     expect(
       (await call(lead, "DELETE", `/teams/${team.id}/members/${lead.id}`)).status
-    ).toBe(400);
+    ).toBe(403);
     expect(
       (
         await call(lead, "POST", `/teams/${team.id}/members/${lead.id}/role`, {
@@ -195,6 +195,58 @@ describe("team lead permissions (AC 33)", () => {
     expect(
       (await call(admin, "DELETE", `/teams/${team.id}/members/${lead.id}`)).status
     ).toBe(200);
+  });
+
+  it("a lead can't remove themselves, even when another lead remains", async () => {
+    const { team, lead } = await teamWithLead();
+    const other = await makeUser();
+    await Team.addMember(team.id, other.id, { role: "lead" });
+    const res = await call(lead, "DELETE", `/teams/${team.id}/members/${lead.id}`);
+    expect(res.status).toBe(403);
+    expect((await Team.membershipFor(lead.id))?.team_id).toBe(team.id);
+  });
+
+  it("a lead can't remove, demote or promote a manager an admin put on the team", async () => {
+    const { team, lead } = await teamWithLead();
+    const manager = await makeUser({ role: "manager" });
+    await Team.addMember(team.id, manager.id, { role: "lead" });
+    expect(
+      (await call(lead, "DELETE", `/teams/${team.id}/members/${manager.id}`)).status
+    ).toBe(403);
+    expect(
+      (
+        await call(lead, "POST", `/teams/${team.id}/members/${manager.id}/role`, {
+          role: "member",
+        })
+      ).status
+    ).toBe(403);
+    expect((await Team.membershipFor(manager.id)).role).toBe("lead");
+    const admin = await makeUser({ role: "admin" });
+    expect(
+      (await call(admin, "DELETE", `/teams/${team.id}/members/${manager.id}`)).status
+    ).toBe(200);
+  });
+
+  it("a removed member's shared presets return to them and leave the team", async () => {
+    const { team, lead } = await teamWithLead();
+    const member = await makeUser();
+    await Team.addMember(team.id, member.id);
+    const shared = (
+      await SlashCommandPresets.create(
+        member.id,
+        { command: "/leaver", prompt: "p", description: "d" },
+        { teamId: team.id }
+      )
+    );
+    expect(shared).toBeTruthy();
+    const res = await call(lead, "DELETE", `/teams/${team.id}/members/${member.id}`);
+    expect(res.status).toBe(200);
+    const rows = await prisma.slash_command_presets.findMany({
+      where: { uid: member.id, command: "/leaver" },
+    });
+    expect(rows.map((r) => r.team_id)).toEqual([0]);
+    const leadSees = await SlashCommandPresets.getUserPresets(lead.id);
+    expect(leadSees.map((p) => p.command)).not.toContain("/leaver");
   });
 
   it("a lead makes another member a lead, logged as team_lead_changed", async () => {

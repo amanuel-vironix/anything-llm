@@ -25,6 +25,25 @@ const LEAD_WORKSPACE_FIELDS = [
   "queryRefusalResponse",
 ];
 
+/**
+ * Why a team lead (not an admin) may not change this member, or null if they may.
+ * Leads act only on default-role members: managers and admins on a team were put
+ * there by an admin. With `self`, a lead can't act on themselves either (leaving the
+ * team would lift its policy from them).
+ * @returns {Promise<string|null>}
+ */
+async function leadRefusal(response, actor, userId, { self = null } = {}) {
+  if (response.locals.teamRole === "admin") return null;
+  if (self && Number(actor?.id) === Number(userId)) return self;
+  const target = await prisma.users.findUnique({
+    where: { id: Number(userId) },
+    select: { role: true },
+  });
+  if (target && target.role !== ROLES.default)
+    return "Team leads can only change members with the default role.";
+  return null;
+}
+
 function teamEndpoints(app) {
   if (!app) return;
 
@@ -263,6 +282,11 @@ function teamEndpoints(app) {
         const actor = await userFromSession(request, response);
         const teamId = response.locals.teamId;
         const userId = Number(request.params.userId);
+        const refusal = await leadRefusal(response, actor, userId, {
+          self: "Team leads can't remove themselves. Ask an administrator.",
+        });
+        if (refusal)
+          return response.status(403).json({ success: false, error: refusal });
         const result = await Team.removeMember(teamId, userId, {
           force: response.locals.teamRole === "admin",
         });
@@ -292,6 +316,9 @@ function teamEndpoints(app) {
         const teamId = response.locals.teamId;
         const userId = Number(request.params.userId);
         const { role } = reqBody(request);
+        const refusal = await leadRefusal(response, actor, userId);
+        if (refusal)
+          return response.status(403).json({ success: false, error: refusal });
         const result = await Team.setMemberRole(teamId, userId, role, {
           force: response.locals.teamRole === "admin",
         });
