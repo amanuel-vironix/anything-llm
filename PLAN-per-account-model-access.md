@@ -1,6 +1,126 @@
 # Plan: per-account access, Google sign-in, guardrails and HIPAA hardening for a centralized LLM
 
-Status: draft, not started. Nothing in this plan has been built.
+Status: **access policies, scoped API keys and teams built** on branch
+`claude/access-policies-teams-b1be97` (see "As built: access policies and teams" below);
+not yet merged. Google sign-in is on `claude/google-oidc-signin-856485`; audit logging on
+`claude/audit-logging-compliance-403f4f`. Guardrails, compliance hardening, budgets and
+scheduled jobs in multi-user mode are not started.
+
+## As built: access policies and teams
+
+**Decisions taken (user, 2026-11-11):** 1 substitute the policy default; 2 admin-only keys;
+3 admin-only policy assignment; 5 tools in this PR; 6 admins without a policy keep every
+tool; 21 router delete unbinds and falls back; 24 legacy keys refused at once (applied in
+multi-user mode only: single-user installs have no users to own a key); 25 10-minute
+invocation expiry; 28 one team per user; 29 managers keep instance-wide access; 30 a
+deleted team's workspaces become admin-only; 31 leads can't read members' chats; 32 Teams
+in this PR. Decisions 33–36 (scheduled jobs) belong to the later scheduled-jobs PR; this PR
+only adds `access_policies.max_scheduled_jobs` (default 5) and `min_job_interval_minutes`
+(default 60) so that PR needs no new `access_policies` migration.
+
+**Commits** (on `origin/master` at `5cbbfeda`): `23db7c8c` schema, models and policy
+module; `7d4e3afb` model enforcement and identity fixes (F-04, F-05 pairing, router
+delete and rule scoping); `d515b2a6` agent tool and MCP filtering; `a8ce01a6` scoped API
+keys (F-01, F-06); `58e3c119` refusal logging; `d15e7fe3` teams, leads, admin endpoints and
+sharing; `89bf9290` MCP route test; then the admin UI and docs commits.
+
+**Where it differs from the plan:**
+- One migration, `20261111120000_access_policies_teams`. `allowed_models` is nullable:
+  null means "no model restriction", so a policy can carry only a tool rule or a router.
+  `slash_command_presets.team_id` is `Int @default(0)` (not nullable) because it is part of
+  the unique key `(uid, team_id, command)`; 0 means personal.
+- Decision 24 replaces `LEGACY_API_KEYS_UNTIL`: ownerless keys get 403 in multi-user mode
+  immediately (logged `legacy_api_key_refused`); admins assign an owner to keep one.
+- `/v1` roles are one table in `validApiKey` keyed by the matched route pattern; any route
+  missing from it is admin-only, so new routes fail closed. A test checks every entry
+  names a real route.
+- `EphemeralAgentHandler` keeps its own function list (the API intentionally omits the
+  clarifying-question tools) and filters it with the same rule, instead of reusing
+  `getDefinition`.
+- The chat UI's tool menus use admin-only endpoints, so they stay unfiltered for admins.
+- Policy assignment is its own route (`POST /admin/users/:id/policy`); `policy_id` is not
+  in `User.writable`, so managers, who can edit users, can't assign policies, and
+  `models/user.js` is unchanged (it is also edited by the Google sign-in branch).
+- Team leads edit a team workspace's safe fields through
+  `POST /teams/:teamId/workspaces/:slug/update` instead of the existing workspace routes,
+  so `server/endpoints/workspaces.js` (instrumented by the audit branch) is untouched.
+  "Add or remove team members on a team workspace" isn't needed: members see team
+  workspaces through `team_id`.
+- Sharing a tool with a team starts the team's rule from the `default` role rule when the
+  team has none, so the team gains only the shared tool.
+- Mobile chat now hits the daily limit through `ApiChatHandler`'s check.
+- Refusals are logged without blocking: `model_refused_by_policy`,
+  `tool_refused_by_policy`, `agent_ws_rejected`, `api_key_expired_refused` (names agreed
+  with the audit branch, which maps them to its catalogue).
+- Not done here: HIPAA-mode team boundaries (managers losing instance-wide access), Google
+  Group sync (`idp_group` is stored only), filtering the developer API's
+  `grepAllSlashCommands` (it still applies every user's presets), Swagger docs not
+  regenerated for the new `/v1` fields (see "Admin UI" below for UI gaps).
+
+**Whole-change review** (fresh reviewer, server diff). Confirmed and fixed, each with a
+regression test and a planted bug it catches:
+- High: router LLM rules sent the prompt to the router's fallback (classifier) model
+  before the policy check. LLM rules are now skipped when the policy doesn't allow
+  that model (`routerSelectionGuard(...).allows`); API vector-search and the agent
+  memory search now pass the user. (`5778716d`)
+- Leads could remove themselves (lifting the team policy) and remove, demote or
+  promote managers and admins on their team; a leaver's shared presets stayed with
+  the team. (`9765ae8c`)
+- A workspace-scoped key could embed into other workspaces through `addToWorkspaces`
+  and call admin-only and document-library routes. (`2f2a8840`)
+- Role defaults failed open on a read error or bad JSON; saving them ignored a failed
+  write. (`73716c84`)
+- Tool sharing created deny policies for teams with no rule of their own, outside a
+  transaction. (`92ec5d3a`)
+- From the UI build: deleting a team made its prompt variables global (now deleted);
+  `api_key_created` was logged for failed creates. (`5778716d`)
+Accepted as designed: removing a member lifts the team policy from them (the role
+default is the floor); a team's copied tool rule applies to managers on the team.
+
+**Admin UI** (`ef33d68e`): Access policies page (policies, role defaults, tool sharing),
+Teams pages (admin list, lead team detail), policy and team columns on Users, owner,
+scope and expiry on API keys, team sharing for presets and prompt variables, user
+choice when pairing a phone. Checked by `yarn build` and ESLint only, not in a
+browser. New text is plain English (not `t()` keys), like the neighbouring pages. The
+prompt-variables page now needs sign-in only (leads use it); the server enforces edit
+rights. Not built: sidebar grouping of team workspaces, an "Owning team" field in
+workspace settings (done from the Teams page instead), a picker for sub-skills
+(`parent#child` is typed).
+
+**Validation** (server): full suite `npx jest server/__tests__` passes (95 suites, 2176
+tests, after the review fixes). One
+existing test changed: `server/__tests__/utils/agents/defaults.test.js` gained a
+pass-through mock of `agentToolAccessForUser`. Two existing tests are timing-sensitive and
+failed once each under load, passing alone (`mcpServers.test.js`,
+`modelPricing/index.test.js`; also `create-files/pptx/images.test.js`). Every enforcement
+point had a bug planted and a test caught it: connector and router guard, both agent
+handlers, websocket identity, mobile device user, router delete and rule scoping, tool
+filter and MCP filter, every `validApiKey` check (expiry, suspended owner, legacy
+refusal, role table and its admin-only default, workspace scope list and single,
+membership), body `userId` (thread create and chat), own-threads scope, daily limit,
+chat owner, `teamRoleValid` (team match and role), lead add rules, last-lead guard
+(`force`), team workspace visibility, lead workspace fields, preset precedence and edit
+rights, team variables, tool sharing.
+
+| Acceptance criterion | Result | Evidence |
+|---|---|---|
+| 1 no policy = unchanged | passed | full suite; one test mock added (above) |
+| 2 allowed models in web, agent, API, OpenAI | passed | `connectorEnforcement.test.js`, `agentEnforcement.test.js`; Telegram is single-user only |
+| 3 policy router, disallowed routed model never called | passed | `connectorEnforcement.test.js` |
+| 4 default-owner key: no admin routes, own workspaces, `workspace_ids` | passed | `scopedApiKeys.test.js` |
+| 5 expired keys, suspended owners refused | passed | `scopedApiKeys.test.js` |
+| 6 API chats under the owner and daily limit | passed | `scopedApiKeys.test.js` |
+| 7 role default denies an MCP server | passed | `agentToolFiltering.test.js` (web and API agents; Telegram single-user) |
+| 8 no rules = today's tools | passed | `agentToolFiltering.test.js` |
+| 22 websocket, thread `userId`, mobile | passed | `agentWebsocketAuth.test.js`, `scopedApiKeys.test.js`, `mobile/deviceUser.test.js` |
+| 23 ownerless keys refused | passed (at once, decision 24) | `scopedApiKeys.test.js` |
+| 26 router can't be deleted out from under a policy | passed (unbind and fall back) | `modelRouterBinding.test.js` |
+| 29 only admin keys manage MCP servers | passed | `scopedApiKeys.test.js` |
+| 31 team policy, own policy wins | passed | `teams.test.js` |
+| 32 shared skill only for that team | passed | `teams.test.js` (rule level; every agent channel uses `agentToolAccessForUser`) |
+| 33 leads manage only their team, all logged | passed | `teams.test.js` |
+| 34 no teams = unchanged | passed | `teams.test.js`, full suite |
+| 35–38 scheduled jobs | not in this PR | decision 33 |
 
 Revised 2026-11-10 against the repo map (`docs/repo-map/`) and the state-machine audit
 (`docs/repo-map/12-state-machines.md` on branch `claude/state-machine-audit-23070d`). The

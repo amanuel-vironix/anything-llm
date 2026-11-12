@@ -12,6 +12,7 @@ import { useModal } from "@/hooks/useModal";
 import Modal from "@/components/lib/Modal";
 import CTAButton from "@/components/lib/CTAButton";
 import Toggle from "@/components/lib/Toggle";
+import { useUserAccessInfo } from "./UserAccessCells";
 
 export default function AdminUsers() {
   const { isOpen, openModal, closeModal } = useModal();
@@ -60,6 +61,9 @@ function UsersContainer() {
   const { user: currUser } = useUser();
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
+  // Policies and teams are admin-only; managers don't see these columns.
+  const showAccess = currUser?.role === "admin";
+  const access = useUserAccessInfo(showAccess);
 
   useEffect(() => {
     async function fetchUsers() {
@@ -94,6 +98,16 @@ function UsersContainer() {
           <th scope="col" className="px-6 py-3">
             Role
           </th>
+          {showAccess && (
+            <>
+              <th scope="col" className="px-6 py-3">
+                Policy
+              </th>
+              <th scope="col" className="px-6 py-3">
+                Team
+              </th>
+            </>
+          )}
           <th scope="col" className="px-6 py-3">
             Date Added
           </th>
@@ -104,7 +118,12 @@ function UsersContainer() {
       </thead>
       <tbody>
         {users.map((user) => (
-          <UserRow key={user.id} currUser={currUser} user={user} />
+          <UserRow
+            key={user.id}
+            currUser={currUser}
+            user={user}
+            access={showAccess ? access : null}
+          />
         ))}
       </tbody>
     </table>

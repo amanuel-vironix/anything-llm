@@ -743,6 +743,21 @@ origin (`server/index.js:67`). Developer API routes are registered by `developer
   (`webPush.js:11-18`); a thrown error is unhandled by the route **(unverified: Express 4 async
   error behavior here)**.
 
+### P-EXT-44 — Developer API chat with an owned key
+- **Actor and preconditions:** a key with an owner (see P-AUTH-31).
+- **Steps:** workspace and thread routes find the workspace through `apiKeyWorkspace` (`server/utils/middleware/validApiKey.js:194`): the owner's workspaces, narrowed by the key's `workspace_ids`; list routes use `apiKeyWorkspaceWhere`. Chat handlers get `user: apiKeyUser(response)`, so the chat is saved under the owner, their policy applies (P-CHAT-31) and `chatLimitError` enforces their daily limit (`server/utils/chats/apiChatHandler.js:34`). Thread routes ignore a body `userId` for owned keys (`chatUser`, `server/endpoints/api/workspaceThread/index.js:33`) and limit default-role owners to their own threads (`ownThreadsScope`, `:23`).
+- **Failure and edge paths:** a workspace outside scope answers like a missing one (400/404); role refusals are 403 from `validApiKey`.
+- **Notes:** fixes F-06; legacy keys in single-user mode keep the old behavior (any workspace, body `userId` honoured).
+
+### P-EXT-45 — OpenAI-compatible API with an owned key
+- **Steps:** GET `/v1/openai/models` and `/v1/openai/vector_stores` list `apiKeyWorkspaces` only; POST `/v1/openai/chat/completions` resolves the model slug through `apiKeyWorkspace`, refuses an owner over their daily limit (429), and passes `user` to `OpenAICompatibleChat` (`server/utils/chats/openaiCompatible.js`), which passes it to `resolveProviderConnector` and every `WorkspaceChats.new`.
+- **Notes:** partly fixes F-21 (a caller `system` message still replaces the workspace prompt). Image generation is admin/manager only (it bypasses `allowed_models`).
+
+### P-EXT-46 — Pairing a mobile device for a user
+- **Actor and preconditions:** admin, multi-user mode.
+- **Steps:** GET `/mobile/connect-info?userId=<id>` (`server/endpoints/mobile/index.js`) pairs the device for that user (refusing a missing or suspended user) and returns `pairedFor`. A device with no user is refused in multi-user mode (`server/endpoints/mobile/middleware/index.js:33`). Mobile chat runs as the device's user, so their policy and daily limit apply.
+- **Notes:** fixes the pairing part of F-05; device tokens still never expire.
+
 ## 5. State machines
 
 **Embed config** (`embed_configs.enabled`, default `false`, `schema.prisma:238`)
@@ -844,13 +859,16 @@ reset (`embedChats.js:90-102`) → deleted by admin (`embedManagement.js:123`) o
 | SE-EXT-55 | P-EXT-42 | DB/VEC/FS | add document to workspace; `audit_events: document.uploaded` / `document.embedded` | `browserExtension.js:98-112`; audit at `:135`, `:149`, `:190` | Yes | |
 | SE-EXT-56 | P-EXT-42 | TEL | `browser_extension_*` | `browserExtension.js:119`, `:145` | n/a | |
 | SE-EXT-57 | P-EXT-43 | DB/FS/CACHE | push subscription | `PushNotifications/index.js:148-163` | Overwrite | One per user |
-| SE-EXT-58 | P-EXT-22 | LOG | `audit_events: mcp.server_added` / `mcp.server_updated` / `mcp.server_started` / `mcp.server_stopped` / `mcp.tool_toggled` / `mcp.server_removed` (actor is the API key) | `server/endpoints/api/mcpServers/index.js:106,222,283,369,424` | n/a | no row before |
-| SE-EXT-59 | P-EXT-21, P-EXT-28 | LOG | `audit_events: chat.viewed_other_user` for embed chat reads (developer API and admin UI), `embed.chats_deleted` | `server/endpoints/api/embed/index.js:136,209`; `server/endpoints/embedManagement.js:159,190` | n/a | no row before |
-| SE-EXT-60 | P-EXT-27 | LOG | `audit_events: embed.chat` per widget chat; `embed.rejected` when the embed middleware refuses; `embed.chats_deleted` for a session delete | `server/endpoints/embed/index.js:48,125`; `server/utils/middleware/embedMiddleware.js:19` | n/a | no row before |
-| SE-EXT-61 | P-EXT-08 (developer API) | LOG | `audit_events: document.viewed`, `document.deleted`, `document.downloaded` | `server/endpoints/api/document/index.js:1061,1198,1414,1450` | n/a | no row before |
-| SE-EXT-62 | Community Hub routes | LOG | `audit_events: community_hub.connected`, `community_hub.published`, `skill.installed`, `settings.changed` | `server/endpoints/communityHub.js:44,50,129,178,237` | n/a | no row before |
-| SE-EXT-63 | Outlook OAuth | LOG | `audit_events: oauth.connected` / `oauth.disconnected` | `server/endpoints/utils/outlookAgentUtils.js:87,136,216` | n/a | no row before |
-| SE-EXT-64 | `POST /export-chat/:type` | LOG | `audit_events: chat.exported` | `server/endpoints/utils.js:86` | n/a | no row before |
+| SE-EXT-58 | P-EXT-44/45 | DB | `workspace_chats` rows now carry the key owner's `user_id` | `server/utils/chats/apiChatHandler.js`, `server/utils/chats/openaiCompatible.js` | no | |
+| SE-EXT-59 | P-EXT-44 | DB | `workspace_threads.user_id` = key owner on thread create | `server/endpoints/api/workspaceThread/index.js` | yes | |
+| SE-EXT-60 | P-EXT-46 | DB | `desktop_mobile_devices.userId` = chosen user | `server/endpoints/mobile/index.js` | revoke device | |
+| SE-EXT-61 | P-EXT-22 | LOG | `audit_events: mcp.server_added` / `mcp.server_updated` / `mcp.server_started` / `mcp.server_stopped` / `mcp.tool_toggled` / `mcp.server_removed` (actor is the API key) | `server/endpoints/api/mcpServers/index.js:106,222,283,369,424` | n/a | no row before |
+| SE-EXT-62 | P-EXT-21, P-EXT-28 | LOG | `audit_events: chat.viewed_other_user` for embed chat reads (developer API and admin UI), `embed.chats_deleted` | `server/endpoints/api/embed/index.js:136,209`; `server/endpoints/embedManagement.js:159,190` | n/a | no row before |
+| SE-EXT-63 | P-EXT-27 | LOG | `audit_events: embed.chat` per widget chat; `embed.rejected` when the embed middleware refuses; `embed.chats_deleted` for a session delete | `server/endpoints/embed/index.js:48,125`; `server/utils/middleware/embedMiddleware.js:19` | n/a | no row before |
+| SE-EXT-64 | P-EXT-08 (developer API) | LOG | `audit_events: document.viewed`, `document.deleted`, `document.downloaded` | `server/endpoints/api/document/index.js:1061,1198,1414,1450` | n/a | no row before |
+| SE-EXT-65 | Community Hub routes | LOG | `audit_events: community_hub.connected`, `community_hub.published`, `skill.installed`, `settings.changed` | `server/endpoints/communityHub.js:44,50,129,178,237` | n/a | no row before |
+| SE-EXT-66 | Outlook OAuth | LOG | `audit_events: oauth.connected` / `oauth.disconnected` | `server/endpoints/utils/outlookAgentUtils.js:87,136,216` | n/a | no row before |
+| SE-EXT-67 | `POST /export-chat/:type` | LOG | `audit_events: chat.exported` | `server/endpoints/utils.js:86` | n/a | no row before |
 
 ## 7. Cross-domain links
 

@@ -25,9 +25,24 @@ const {
   usesModelRouter,
 } = require("../helpers/reasoningEffort");
 const { DocumentManager } = require("../DocumentManager");
+const {
+  getPolicyForUser,
+  enforceAllowedSelection,
+  routerSelectionGuard,
+  enforceAgentsAllowed,
+  policyRouterWorkspace,
+  logPolicyRefusal,
+} = require("../accessPolicy");
+const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
+
+/** An unused invocation UUID stops being valid after this long (decision 25). */
+const INVOCATION_TTL_MS = 10 * 60 * 1000;
 
 class AgentHandler {
   #invocationUUID;
+  #caller = null;
+  /** Tool access for the invoking user (see utils/accessPolicy/agentTools). */
+  #toolAccess = null;
   #funcsToLoad = [];
   // Startup args (socket, etc.) retained so tools toggled on mid-session can be
   // loaded with the same options used at session start.
@@ -39,8 +54,16 @@ class AgentHandler {
   model = null;
   attachments = [];
 
-  constructor({ uuid }) {
+  /**
+   * @param {object} opts
+   * @param {string} opts.uuid - the invocation UUID
+   * @param {{multiUserMode: boolean, userId: number|null}} [opts.caller] - who opened the
+   *   connection, from their session token. When given, a multi-user invocation is only
+   *   usable by its own user (F-04).
+   */
+  constructor({ uuid, caller = null }) {
     this.#invocationUUID = uuid;
+    this.#caller = caller;
   }
 
   log(text, ...args) {
@@ -488,12 +511,30 @@ class AgentHandler {
   }
 
   async #providerSetupAndCheck(prompt = null) {
+    // The invoking user's access policy (own, then team). Null means today's behavior.
+    const policy = await getPolicyForUser(
+      this.invocation.user_id ? { id: Number(this.invocation.user_id) } : null
+    );
+    const refusal = { userId: this.invocation.user_id ?? null };
+    enforceAgentsAllowed(policy, refusal);
+
     this.provider = this.invocation.workspace.agentProvider ?? null; // set provider to workspace agent provider if it exists
     this.model = this.#fetchModel();
 
+    // A policy router sends this account's agent traffic through that router too.
+    if (policy?.router_id) this.provider = "anythingllm-router";
+
     // If provider resolved to model router, resolve the actual provider/model
     if (this.provider === "anythingllm-router") {
-      await this.#resolveRouterProvider(prompt);
+      await this.#resolveRouterProvider(prompt, policy);
+    } else if (policy) {
+      const selection = enforceAllowedSelection(
+        policy,
+        { provider: this.provider, model: this.model ?? null },
+        refusal
+      );
+      this.provider = selection.provider;
+      this.model = selection.model;
     }
 
     if (!this.provider)
@@ -501,16 +542,12 @@ class AgentHandler {
     this.checkSetup();
   }
 
-  async #resolveRouterProvider(prompt = null) {
+  async #resolveRouterProvider(prompt = null, policy = null) {
     const { AnythingLLMModelRouter } = require("../AiProviders/modelRouter");
-    const routerWorkspace = this.invocation.workspace.router_id
-      ? this.invocation.workspace
-      : {
-          ...this.invocation.workspace,
-          router_id: process.env.MODEL_ROUTER_ID
-            ? Number(process.env.MODEL_ROUTER_ID)
-            : null,
-        };
+    const routerWorkspace = policyRouterWorkspace(
+      this.invocation.workspace,
+      policy
+    );
 
     // Resolve the thread slug from the numeric thread_id so the route cache key
     // matches the key used everywhere else.
@@ -526,7 +563,14 @@ class AgentHandler {
       thread = this._threadSlug ? { slug: this._threadSlug } : null;
     }
 
-    const router = new AnythingLLMModelRouter(routerWorkspace);
+    const router = new AnythingLLMModelRouter(
+      routerWorkspace,
+      null,
+      null,
+      routerSelectionGuard(policy, {
+        userId: this.invocation.user_id ?? null,
+      })
+    );
     const { ModelRouterService } = require("../router");
     const workspace = this.invocation.workspace;
     const user = this.invocation.user_id
@@ -567,6 +611,26 @@ class AgentHandler {
     });
     if (invocation?.closed)
       throw new Error("This agent invocation is already closed");
+    // Only the invoking user's own session may drive the invocation (F-04). Checked
+    // before anything else touches the invocation, including the single-use claim.
+    if (invocation && this.#caller?.multiUserMode) {
+      if (
+        !invocation.user_id ||
+        Number(invocation.user_id) !== Number(this.#caller.userId)
+      ) {
+        logPolicyRefusal(
+          "agent_ws_rejected",
+          { reason: "other_user", invocationId: invocation.id },
+          this.#caller.userId ?? null
+        );
+        throw new Error("You are not allowed to use this agent invocation");
+      }
+    }
+    if (
+      invocation?.createdAt &&
+      Date.now() - new Date(invocation.createdAt).getTime() > INVOCATION_TTL_MS
+    )
+      throw new Error("This agent invocation has expired");
     if (invocation && !invocation.workspace)
       throw new Error("This agent invocation has no valid workspace");
 
@@ -618,6 +682,17 @@ class AgentHandler {
    * @param {object} args - Startup args (socket, etc.) used to resolve call options.
    */
   async #attachPluginByName(name, args) {
+    // Re-check against the user's tool rule before attaching (defense in depth, and the
+    // only check for a tool turned on mid-chat).
+    if (this.#toolAccess && !this.#toolAccess.isAllowed(name)) {
+      this.log(`${name} is not allowed for this user. Skipping.`);
+      logPolicyRefusal(
+        "tool_refused_by_policy",
+        { tool: name, check: "agent_tools" },
+        this.invocation?.user_id ?? null
+      );
+      return;
+    }
     // Load child plugin
     if (name.includes("#")) {
       const [parent, childPluginName] = name.split("#");
@@ -684,7 +759,8 @@ class AgentHandler {
       const plugins =
         await new MCPCompatibilityLayer().convertServerToolsToPlugins(
           mcpPluginName,
-          this.aibitat
+          this.aibitat,
+          { toolFilter: this.#toolAccess?.mcpToolFilter ?? null }
         );
       if (!plugins) {
         this.log(
@@ -791,6 +867,10 @@ class AgentHandler {
       user,
       this.invocation.prompt
     );
+
+    // getDefinition already filtered the list by the user's tool rule; keep the same
+    // access to re-check each plugin as it is attached (including mid-chat toggles).
+    this.#toolAccess = await agentToolAccessForUser(user);
 
     this.aibitat.agent(USER_AGENT.name, userAgentDef);
     this.aibitat.agent(WORKSPACE_AGENT.name, workspaceAgentDef);

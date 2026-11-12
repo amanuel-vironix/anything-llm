@@ -2,6 +2,34 @@ import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
 
 const Admin = {
+  // Google (OIDC) sign-in settings - admin only.
+  /** @returns {Promise<Object|null>} the settings with the secret masked, or null when not allowed */
+  oidcSettings: async () => {
+    return await fetch(`${API_BASE}/admin/oidc-settings`, {
+      method: "GET",
+      headers: baseHeaders(),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => res?.settings || null)
+      .catch((e) => {
+        console.error(e);
+        return null;
+      });
+  },
+  /** @returns {Promise<{success: boolean, errors: Object<string, string>}>} */
+  updateOidcSettings: async (data) => {
+    return await fetch(`${API_BASE}/admin/oidc-settings`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify(data),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, errors: { form: e.message } };
+      });
+  },
+
   // User Management
   users: async () => {
     return await fetch(`${API_BASE}/admin/users`, {
@@ -231,6 +259,28 @@ const Admin = {
       .catch((e) => {
         console.error(e);
         return false;
+      });
+  },
+  /**
+   * Change an API key's owner, workspace scope or expiry.
+   * @param {number} apiKeyId
+   * @param {{userId?: number, workspaceIds?: number[]|null, expiresAt?: string|null}} data
+   * @returns {Promise<{apiKey: object|null, error: string|null}>}
+   */
+  updateApiKey: async function (apiKeyId, data = {}) {
+    return fetch(`${API_BASE}/admin/api-keys/${apiKeyId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify(data),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (json) return json;
+        throw new Error(res.statusText || "Error updating api key.");
+      })
+      .catch((e) => {
+        console.error(e);
+        return { apiKey: null, error: e.message };
       });
   },
 };

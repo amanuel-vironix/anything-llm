@@ -2,7 +2,7 @@
 
 Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerate after changing a domain file (see README).
 
-242 paths across 8 domain files.
+260 paths across 8 domain files.
 
 ## [01-auth-and-users.md](01-auth-and-users.md)
 
@@ -38,6 +38,14 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-AUTH-28](01-auth-and-users.md#p-auth-28--mobile-connect-info-and-device-registration) | Mobile: connect-info and device registration |
 | [P-AUTH-29](01-auth-and-users.md#p-auth-29--mobile-approve-list-delete-and-device-authentication) | Mobile: approve, list, delete, and device authentication |
 | [P-AUTH-30](01-auth-and-users.md#p-auth-30--daily-message-limit-enforcement) | Daily message limit enforcement |
+| [P-AUTH-31](01-auth-and-users.md#p-auth-31--scoped-developer-api-key-check) | Scoped developer API key check |
+| [P-AUTH-32](01-auth-and-users.md#p-auth-32--admin-creates-or-rescopes-an-api-key) | Admin creates or rescopes an API key |
+| [P-AUTH-33](01-auth-and-users.md#p-auth-33--access-policy-administration-and-assignment) | Access policy administration and assignment |
+| [P-AUTH-34](01-auth-and-users.md#p-auth-34--team-administration-admin) | Team administration (admin) |
+| [P-AUTH-35](01-auth-and-users.md#p-auth-35--team-lead-manages-members) | Team lead manages members |
+| [P-AUTH-36](01-auth-and-users.md#p-auth-36--google-oidc-sign-in-start) | Google (OIDC) sign-in: start |
+| [P-AUTH-37](01-auth-and-users.md#p-auth-37--google-oidc-sign-in-callback) | Google (OIDC) sign-in: callback |
+| [P-AUTH-38](01-auth-and-users.md#p-auth-38--google-sign-in-settings) | Google sign-in settings |
 
 ## [02-workspaces-and-chat.md](02-workspaces-and-chat.md)
 
@@ -73,6 +81,9 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-CHAT-28](02-workspaces-and-chat.md#p-chat-28-model-router-crud-and-cache-invalidation) | Model router CRUD and cache invalidation |
 | [P-CHAT-29](02-workspaces-and-chat.md#p-chat-29-search-workspaces-and-threads) | Search workspaces and threads |
 | [P-CHAT-30](02-workspaces-and-chat.md#p-chat-30-capability-probes) | Capability probes |
+| [P-CHAT-31](02-workspaces-and-chat.md#p-chat-31--access-policy-on-the-chat-model) | Access policy on the chat model |
+| [P-CHAT-32](02-workspaces-and-chat.md#p-chat-32--team-workspaces) | Team workspaces |
+| [P-CHAT-33](02-workspaces-and-chat.md#p-chat-33--shared-slash-command-presets-and-prompt-variables) | Shared slash command presets and prompt variables |
 
 ## [03-documents-and-ingestion.md](03-documents-and-ingestion.md)
 
@@ -144,6 +155,10 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-AGENT-33](04-agents-tools-and-automation.md#p-agent-33--web-push-subscription) | Web push subscription |
 | [P-AGENT-34](04-agents-tools-and-automation.md#p-agent-34--generated-file-and-image-cleanup) | Generated file and image cleanup |
 | [P-AGENT-35](04-agents-tools-and-automation.md#p-agent-35--model-router-llm-classification-agent-used-internally) | Model-router LLM classification (agent used internally) |
+| [P-AGENT-36](04-agents-tools-and-automation.md#p-agent-36--agent-websocket-identity-check) | Agent websocket identity check |
+| [P-AGENT-37](04-agents-tools-and-automation.md#p-agent-37--access-policy-on-agent-sessions-web-api-telegram) | Access policy on agent sessions (web, API, Telegram) |
+| [P-AGENT-38](04-agents-tools-and-automation.md#p-agent-38--agent-tool-and-mcp-filtering) | Agent tool and MCP filtering |
+| [P-AGENT-39](04-agents-tools-and-automation.md#p-agent-39--role-defaults-and-sharing-a-tool-with-teams) | Role defaults and sharing a tool with teams |
 
 ## [05-external-channels.md](05-external-channels.md)
 
@@ -192,6 +207,9 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-EXT-41](05-external-channels.md#p-ext-41-extension-handshake-and-workspace-list) | Extension handshake and workspace list |
 | [P-EXT-42](05-external-channels.md#p-ext-42-extension-saves-page-content) | Extension saves page content |
 | [P-EXT-43](05-external-channels.md#p-ext-43-subscribe-to-push) | Subscribe to push |
+| [P-EXT-44](05-external-channels.md#p-ext-44--developer-api-chat-with-an-owned-key) | Developer API chat with an owned key |
+| [P-EXT-45](05-external-channels.md#p-ext-45--openai-compatible-api-with-an-owned-key) | OpenAI-compatible API with an owned key |
+| [P-EXT-46](05-external-channels.md#p-ext-46--pairing-a-mobile-device-for-a-user) | Pairing a mobile device for a user |
 
 ## [06-admin-system-and-runtime.md](06-admin-system-and-runtime.md)
 

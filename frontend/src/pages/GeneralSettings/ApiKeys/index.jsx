@@ -3,7 +3,10 @@ import Sidebar from "@/components/SettingsSidebar";
 import { isMobile } from "react-device-detect";
 import * as Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { PlusCircle } from "@phosphor-icons/react";
+import { PlusCircle, Warning } from "@phosphor-icons/react";
+import moment from "moment";
+import Workspace from "@/models/workspace";
+import EditApiKeyModal from "./EditApiKeyModal";
 import Admin from "@/models/admin";
 import ApiKeyRow from "./ApiKeyRow";
 import NewApiKeyModal from "./NewApiKeyModal";
@@ -20,18 +23,34 @@ export default function AdminApiKeys() {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [apiKeys, setApiKeys] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [editingKey, setEditingKey] = useState(null);
+  const editModal = useModal();
+  const multiUser = !!userFromStorage();
 
   const fetchExistingKeys = async () => {
-    const user = userFromStorage();
-    const Model = !!user ? Admin : System;
+    const Model = multiUser ? Admin : System;
     const { apiKeys: foundKeys } = await Model.getApiKeys();
-    setApiKeys(foundKeys);
+    setApiKeys(foundKeys || []);
     setLoading(false);
   };
 
   useEffect(() => {
     fetchExistingKeys();
+    Workspace.all().then(setWorkspaces);
+    if (multiUser) Admin.users().then((found) => setUsers(found || []));
   }, []);
+
+  const openEdit = (apiKey) => {
+    setEditingKey(apiKey);
+    editModal.openModal();
+  };
+
+  // In multi-user mode a key with no owner is refused on every /v1 route.
+  const ownerlessKeys = multiUser
+    ? apiKeys.filter((apiKey) => !apiKey.user_id)
+    : [];
 
   const removeApiKey = (id) => {
     setApiKeys((prevKeys) => prevKeys.filter((apiKey) => apiKey.id !== id));
@@ -63,6 +82,38 @@ export default function AdminApiKeys() {
               {t("api.link")} &rarr;
             </a>
           </div>
+          {ownerlessKeys.length > 0 && (
+            <div className="mt-4 flex gap-x-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/40 text-amber-300 light:text-amber-700 text-xs">
+              <Warning size={18} className="shrink-0" />
+              <div className="flex flex-col gap-y-2">
+                <p className="font-semibold">
+                  {ownerlessKeys.length} API key(s) have no owner and are
+                  refused on every API route.
+                </p>
+                <p>
+                  Each key now acts as its owner. Assign an owner to keep a key
+                  working, or delete it.
+                </p>
+                <ul className="flex flex-col gap-y-1">
+                  {ownerlessKeys.map((apiKey) => (
+                    <li key={apiKey.id} className="flex items-center gap-x-3">
+                      <span>
+                        {apiKey.name || t("api.row.unnamed")} (created{" "}
+                        {moment(apiKey.createdAt).format("ll")})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openEdit(apiKey)}
+                        className="border-none underline hover:opacity-80"
+                      >
+                        Assign owner
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
           <div className="w-full justify-end flex">
             <CTAButton
               onClick={openModal}
@@ -84,7 +135,7 @@ export default function AdminApiKeys() {
                 containerClassName="flex w-full"
               />
             ) : (
-              <table className="w-full text-xs text-left rounded-lg min-w-[720px] border-spacing-0 md:mt-6 mt-0">
+              <table className="w-full text-xs text-left rounded-lg min-w-[1040px] border-spacing-0 md:mt-6 mt-0">
                 <thead className="text-theme-text-secondary text-xs leading-[18px] font-bold uppercase border-white/10 border-b">
                   <tr>
                     <th scope="col" className="px-6 py-3 rounded-tl-lg">
@@ -92,6 +143,20 @@ export default function AdminApiKeys() {
                     </th>
                     <th scope="col" className="px-6 py-3">
                       {t("api.table.key")}
+                    </th>
+                    {multiUser && (
+                      <th scope="col" className="px-6 py-3">
+                        Owner
+                      </th>
+                    )}
+                    <th scope="col" className="px-6 py-3">
+                      Workspaces
+                    </th>
+                    <th scope="col" className="px-6 py-3">
+                      Expires
+                    </th>
+                    <th scope="col" className="px-6 py-3">
+                      Last used
                     </th>
                     <th scope="col" className="px-6 py-3">
                       {t("api.table.by")}
@@ -107,7 +172,10 @@ export default function AdminApiKeys() {
                 <tbody>
                   {apiKeys.length === 0 ? (
                     <tr className="bg-transparent text-theme-text-secondary text-sm font-medium">
-                      <td colSpan="5" className="px-6 py-4 text-center">
+                      <td
+                        colSpan={multiUser ? 9 : 8}
+                        className="px-6 py-4 text-center"
+                      >
                         {t("api.empty")}
                       </td>
                     </tr>
@@ -117,6 +185,9 @@ export default function AdminApiKeys() {
                         key={apiKey.id}
                         apiKey={apiKey}
                         removeApiKey={removeApiKey}
+                        multiUser={multiUser}
+                        workspaces={workspaces}
+                        onEdit={multiUser ? () => openEdit(apiKey) : null}
                       />
                     ))
                   )}
@@ -129,8 +200,21 @@ export default function AdminApiKeys() {
           <NewApiKeyModal
             closeModal={closeModal}
             onSuccess={fetchExistingKeys}
+            users={users}
+            workspaces={workspaces}
           />
         </Modal>
+        <EditApiKeyModal
+          isOpen={editModal.isOpen}
+          closeModal={() => {
+            editModal.closeModal();
+            setEditingKey(null);
+          }}
+          onSuccess={fetchExistingKeys}
+          apiKey={editingKey}
+          users={users}
+          workspaces={workspaces}
+        />
       </div>
     </div>
   );

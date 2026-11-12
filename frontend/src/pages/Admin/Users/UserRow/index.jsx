@@ -6,6 +6,7 @@ import EditUserModal from "./EditUserModal";
 import showToast from "@/utils/toast";
 import { useModal } from "@/hooks/useModal";
 import Modal from "@/components/lib/Modal";
+import { UserPolicyCell, UserTeamCell } from "../UserAccessCells";
 
 const ModMap = {
   admin: ["admin", "manager", "default"],
@@ -13,7 +14,7 @@ const ModMap = {
   default: [],
 };
 
-export default function UserRow({ currUser, user }) {
+export default function UserRow({ currUser, user, access = null }) {
   const rowRef = useRef(null);
   const canModify = ModMap[currUser?.role || "default"].includes(user.role);
   const [suspended, setSuspended] = useState(user.suspended === 1);
@@ -62,8 +63,27 @@ export default function UserRow({ currUser, user }) {
       >
         <th scope="row" className="px-6 whitespace-nowrap">
           {user.username}
+          {(user.identities || []).map((identity) => (
+            <span
+              key={`${identity.provider}-${identity.email}`}
+              className="block text-[11px] font-normal text-white text-opacity-60"
+              title={
+                identity.lastLoginAt
+                  ? `Last Google sign-in ${moment(identity.lastLoginAt).format("lll")}`
+                  : undefined
+              }
+            >
+              Google: {identity.email || "linked"}
+            </span>
+          ))}
         </th>
         <td className="px-6">{titleCase(user.role)}</td>
+        {access && (
+          <>
+            <UserPolicyCell user={user} policies={access.policies} />
+            <UserTeamCell team={access.teamByUserId[user.id]} />
+          </>
+        )}
         <td className="px-6">{moment(user.createdAt).format("lll")}</td>
         <td className="px-6 flex items-center gap-x-6 h-full mt-2">
           {canModify && (

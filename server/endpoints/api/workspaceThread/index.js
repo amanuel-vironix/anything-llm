@@ -1,7 +1,11 @@
 const { v4: uuidv4 } = require("uuid");
 const { WorkspaceThread } = require("../../../models/workspaceThread");
-const { Workspace } = require("../../../models/workspace");
-const { validApiKey } = require("../../../utils/middleware/validApiKey");
+const {
+  validApiKey,
+  apiKeyUser,
+  apiKeyWorkspace,
+  apiKeyOwnThreadsOnly,
+} = require("../../../utils/middleware/validApiKey");
 const { reqBody, multiUserMode } = require("../../../utils/http");
 const { VALID_CHAT_MODE } = require("../../../utils/chats/stream");
 const { Telemetry } = require("../../../models/telemetry");
@@ -14,6 +18,23 @@ const { WorkspaceChats } = require("../../../models/workspaceChats");
 const { User } = require("../../../models/user");
 const { ApiChatHandler } = require("../../../utils/chats/apiChatHandler");
 const { getModelTag } = require("../../utils");
+
+/** Default-role key owners reach only their own threads. */
+function ownThreadsScope(response) {
+  return apiKeyOwnThreadsOnly(response)
+    ? { user_id: apiKeyUser(response).id }
+    : {};
+}
+
+/**
+ * The user a thread chat is logged under: an owned key's owner (a body `userId` is
+ * ignored), otherwise the `userId` given in the body (legacy single-user keys).
+ */
+async function chatUser(response, bodyUserId) {
+  const owner = apiKeyUser(response);
+  if (owner) return owner;
+  return bodyUserId ? await User.get({ id: Number(bodyUserId) }) : null;
+}
 
 function apiWorkspaceThreadEndpoints(app) {
   if (!app) return;
@@ -72,7 +93,9 @@ function apiWorkspaceThreadEndpoints(app) {
       try {
         const wslug = request.params.slug;
         let { userId = null, name = null, slug = null } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(wslug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(wslug),
+        });
 
         if (!workspace) {
           response.sendStatus(400).end();
@@ -83,6 +106,9 @@ function apiWorkspaceThreadEndpoints(app) {
         // it needs to be nullified as no users exist. This can still fail validation
         // as we don't check if the userID is valid.
         if (!response.locals.multiUserMode && !!userId) userId = null;
+        // An owned key acts as its owner; a userId in the body is ignored.
+        const owner = apiKeyUser(response);
+        if (owner) userId = owner.id;
 
         const { thread, message } = await WorkspaceThread.new(
           workspace,
@@ -166,7 +192,9 @@ function apiWorkspaceThreadEndpoints(app) {
       try {
         const { slug, threadSlug } = request.params;
         const { name } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
         if (!workspace) {
           response.status(404).json({ message: "Workspace not found" });
           return;
@@ -175,6 +203,7 @@ function apiWorkspaceThreadEndpoints(app) {
         const thread = await WorkspaceThread.get({
           slug: String(threadSlug),
           workspace_id: workspace.id,
+          ...ownThreadsScope(response),
         });
         if (!thread) {
           response.status(404).json({ message: "Thread not found" });
@@ -223,7 +252,9 @@ function apiWorkspaceThreadEndpoints(app) {
     */
       try {
         const { slug, threadSlug } = request.params;
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!workspace) {
           response.sendStatus(400).end();
@@ -233,6 +264,7 @@ function apiWorkspaceThreadEndpoints(app) {
         await WorkspaceThread.delete({
           slug: String(threadSlug),
           workspace_id: workspace.id,
+          ...ownThreadsScope(response),
         });
         response.sendStatus(200).end();
       } catch (e) {
@@ -292,7 +324,9 @@ function apiWorkspaceThreadEndpoints(app) {
       */
       try {
         const { slug, threadSlug } = request.params;
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
         if (!workspace) {
           response.status(404).json({ message: "Workspace not found" });
           return;
@@ -301,6 +335,7 @@ function apiWorkspaceThreadEndpoints(app) {
         const thread = await WorkspaceThread.get({
           slug: String(threadSlug),
           workspace_id: workspace.id,
+          ...ownThreadsScope(response),
         });
         if (!thread) {
           response.status(404).json({ message: "Thread not found" });
@@ -398,7 +433,9 @@ function apiWorkspaceThreadEndpoints(app) {
           attachments = [],
           reset = false,
         } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
         if (!workspace) {
           response.status(404).json({
             id: uuidv4(),
@@ -414,6 +451,7 @@ function apiWorkspaceThreadEndpoints(app) {
         const thread = await WorkspaceThread.get({
           slug: String(threadSlug),
           workspace_id: workspace.id,
+          ...ownThreadsScope(response),
         });
         if (!thread) {
           response.status(404).json({
@@ -445,7 +483,7 @@ function apiWorkspaceThreadEndpoints(app) {
           return;
         }
 
-        const user = userId ? await User.get({ id: Number(userId) }) : null;
+        const user = await chatUser(response, userId);
         const result = await ApiChatHandler.chatSync({
           workspace,
           message,
@@ -587,7 +625,9 @@ function apiWorkspaceThreadEndpoints(app) {
           attachments = [],
           reset = false,
         } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
         if (!workspace) {
           return response.status(404).json({
             id: uuidv4(),
@@ -602,6 +642,7 @@ function apiWorkspaceThreadEndpoints(app) {
         const thread = await WorkspaceThread.get({
           slug: String(threadSlug),
           workspace_id: workspace.id,
+          ...ownThreadsScope(response),
         });
         if (!thread) {
           return response.status(404).json({
@@ -631,7 +672,7 @@ function apiWorkspaceThreadEndpoints(app) {
           });
         }
 
-        const user = userId ? await User.get({ id: Number(userId) }) : null;
+        const user = await chatUser(response, userId);
 
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("Content-Type", "text/event-stream");

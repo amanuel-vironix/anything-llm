@@ -94,6 +94,66 @@ const User = {
     } = user;
     return { ...rest };
   },
+  lastAdminError: "No active system admins will remain if you do this.",
+
+  /**
+   * Whether applying `updates` to `user` could leave the instance with one
+   * fewer active admin: the user is an active admin and the update demotes or
+   * suspends them.
+   * @param {{role: string, suspended: number}} user
+   * @param {{role?: string, suspended?: number}} updates - already validated and cast
+   * @returns {boolean}
+   */
+  removesActiveAdmin: function (user, updates = {}) {
+    if (!user || user.role !== "admin" || Number(user.suspended) !== 0)
+      return false;
+    if (updates.hasOwnProperty("role") && updates.role !== "admin") return true;
+    if (updates.hasOwnProperty("suspended") && Number(updates.suspended) !== 0)
+      return true;
+    return false;
+  },
+
+  /**
+   * Whether `updates` touches the fields that decide who is an active admin.
+   * Such writes always run inside `_withActiveAdminGuard`.
+   * @param {Object} updates
+   * @returns {boolean}
+   */
+  changesAdminStanding: function (updates = {}) {
+    return (
+      updates.hasOwnProperty("role") || updates.hasOwnProperty("suspended")
+    );
+  },
+
+  /**
+   * Runs `write` and the check that at least one active admin remains in one
+   * transaction, and rolls the write back when none would (SMF-13).
+   *
+   * `removesAdmin(tx)` decides, from rows read inside the transaction, whether
+   * this write takes away an active admin. Only then is the count enforced, so
+   * an instance that already has none (for example after a database edit) can
+   * still manage its other users. Reading inside the transaction matters: a
+   * decision made on a read outside it can be stale by the time the write
+   * commits (a concurrent promotion). SQLite serialises the two writers; the
+   * one whose read went stale gets a busy error instead of committing.
+   * @template T
+   * @param {(tx: import("@prisma/client").Prisma.TransactionClient) => Promise<T>} write
+   * @param {(tx: import("@prisma/client").Prisma.TransactionClient) => Promise<boolean>} removesAdmin
+   * @returns {Promise<T>} the write's result; throws `lastAdminError` when refused.
+   */
+  _withActiveAdminGuard: async function (write, removesAdmin) {
+    return prisma.$transaction(async (tx) => {
+      const enforce = await removesAdmin(tx);
+      const result = await write(tx);
+      if (!enforce) return result;
+      const activeAdmins = await tx.users.count({
+        where: { role: "admin", suspended: 0 },
+      });
+      if (activeAdmins < 1) throw new Error(this.lastAdminError);
+      return result;
+    });
+  },
+
   _identifyErrorAndFormatMessage: function (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       // P2002 is the unique constraint violation error code
@@ -112,31 +172,73 @@ const User = {
     dailyMessageLimit = null,
     bio = "",
   }) {
-    const passwordCheck = this.checkPasswordComplexity(password);
-    if (!passwordCheck.checkedOK) {
-      return { user: null, error: passwordCheck.error };
+    const { data, error } = this.prepareCreate({
+      username,
+      password,
+      role,
+      dailyMessageLimit,
+      bio,
+    });
+    if (error) return { user: null, error };
+
+    try {
+      const user = await prisma.users.create({ data });
+      return { user: this.filterFields(user), error: null };
+    } catch (error) {
+      console.error("FAILED TO CREATE USER.", error.message);
+      return { user: null, error: this._identifyErrorAndFormatMessage(error) };
+    }
+  },
+
+  /**
+   * Validates new-user fields and hashes the password, without writing.
+   * Callers that must create the user inside their own transaction (invite
+   * claims, Google sign-in) pass `data` to `tx.users.create`.
+   * @param {{username: string, password?: string, role?: string, dailyMessageLimit?: number|null, bio?: string}} params
+   * @param {{unusablePassword?: boolean}} options - true for accounts that sign
+   *   in only through an identity provider: the hash is of 32 random bytes
+   *   nobody knows, and `password` is ignored.
+   * @returns {{data: Object|null, error: string|null}}
+   */
+  prepareCreate: function (
+    {
+      username,
+      password,
+      role = "default",
+      dailyMessageLimit = null,
+      bio = "",
+    },
+    { unusablePassword = false } = {}
+  ) {
+    const bcrypt = require("bcryptjs");
+    let hashedPassword;
+    if (unusablePassword) {
+      hashedPassword = bcrypt.hashSync(
+        require("crypto").randomBytes(32).toString("hex"),
+        10
+      );
+    } else {
+      const passwordCheck = this.checkPasswordComplexity(password);
+      if (!passwordCheck.checkedOK)
+        return { data: null, error: passwordCheck.error };
+      hashedPassword = bcrypt.hashSync(password, 10);
     }
 
     try {
-      // Validate username format (validation function handles all checks)
-      const validatedUsername = this.validations.username(username);
-
-      const bcrypt = require("bcryptjs");
-      const hashedPassword = bcrypt.hashSync(password, 10);
-      const user = await prisma.users.create({
+      return {
         data: {
-          username: validatedUsername,
+          // Validate username format (validation function handles all checks)
+          username: this.validations.username(username),
           password: hashedPassword,
           role: this.validations.role(role),
           bio: this.validations.bio(bio),
           dailyMessageLimit:
             this.validations.dailyMessageLimit(dailyMessageLimit),
         },
-      });
-      return { user: this.filterFields(user), error: null };
+        error: null,
+      };
     } catch (error) {
-      console.error("FAILED TO CREATE USER.", error.message);
-      return { user: null, error: this._identifyErrorAndFormatMessage(error) };
+      return { data: null, error: error.message };
     }
   },
   // Log the changes to a user object, but omit sensitive fields
@@ -198,10 +300,23 @@ const User = {
         updates.password = bcrypt.hashSync(updates.password, 10);
       }
 
-      const user = await prisma.users.update({
-        where: { id: parseInt(userId) },
-        data: updates,
-      });
+      const write = (client) =>
+        client.users.update({
+          where: { id: parseInt(userId) },
+          data: updates,
+        });
+      // Any role or suspension change is guarded, not only the ones that look
+      // like they remove an admin: `currentUser` was read outside the
+      // transaction, so a concurrent promotion can make a stale "not an admin"
+      // read wrong by the time this write commits.
+      const user = this.changesAdminStanding(updates)
+        ? await this._withActiveAdminGuard(write, async (tx) =>
+            this.removesActiveAdmin(
+              await tx.users.findUnique({ where: { id: parseInt(userId) } }),
+              updates
+            )
+          )
+        : await write(prisma);
 
       await EventLogs.logEvent(
         "user_updated",
@@ -305,22 +420,54 @@ const User = {
    * Kept chats are excluded from history so they never mix into the context
    * of sessionless API, Telegram or memory extraction, which all match
    * chats with no user. They remain visible in workspace chats and exports.
+   *
+   * Refuses (returns false, deletes nothing) when the delete would leave no
+   * active admin, unless `allowNoActiveAdmin` is set. Only the rollback of a
+   * failed switch to multi-user mode, which deletes every user, sets it.
    * @param {Object} clause - The clause to filter the users to delete by.
+   * @param {{allowNoActiveAdmin?: boolean}} options
    * @returns {Promise<boolean>} True if the users were deleted.
    */
-  delete: async function (clause = {}) {
+  delete: async function (clause = {}, { allowNoActiveAdmin = false } = {}) {
+    const { success } = await this.deleteWithReason(clause, {
+      allowNoActiveAdmin,
+    });
+    return success;
+  },
+
+  /**
+   * Same as `delete`, but says why a delete was refused.
+   * @param {Object} clause
+   * @param {{allowNoActiveAdmin?: boolean}} options
+   * @returns {Promise<{success: boolean, error: string|null}>}
+   */
+  deleteWithReason: async function (
+    clause = {},
+    { allowNoActiveAdmin = false } = {}
+  ) {
     try {
-      await prisma.$transaction([
-        prisma.workspace_chats.updateMany({
+      const write = async (tx) => {
+        await tx.workspace_chats.updateMany({
           where: { users: clause },
           data: { user_id: null, include: false },
-        }),
-        prisma.users.deleteMany({ where: clause }),
-      ]);
-      return true;
+        });
+        await tx.users.deleteMany({ where: clause });
+      };
+      // Decided inside the transaction: a count read outside it would let a
+      // delete racing a promotion leave no active admin.
+      if (allowNoActiveAdmin) await prisma.$transaction(write);
+      else
+        await this._withActiveAdminGuard(
+          write,
+          async (tx) =>
+            (await tx.users.count({
+              where: { AND: [clause, { role: "admin", suspended: 0 }] },
+            })) > 0
+        );
+      return { success: true, error: null };
     } catch (error) {
       console.error(error.message);
-      return false;
+      return { success: false, error: error.message };
     }
   },
 

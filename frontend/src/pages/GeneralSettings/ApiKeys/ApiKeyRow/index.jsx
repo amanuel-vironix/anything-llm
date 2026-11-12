@@ -6,7 +6,48 @@ import { userFromStorage } from "@/utils/request";
 import System from "@/models/system";
 import { useTranslation } from "react-i18next";
 
-export default function ApiKeyRow({ apiKey, removeApiKey }) {
+/**
+ * The multi-user list sends `workspaceIds` parsed; the single-user list sends the raw
+ * `workspace_ids` JSON column.
+ */
+function keyWorkspaceIds(apiKey) {
+  if (apiKey.workspaceIds !== undefined) return apiKey.workspaceIds;
+  if (!apiKey.workspace_ids) return null;
+  try {
+    return JSON.parse(apiKey.workspace_ids);
+  } catch {
+    return null;
+  }
+}
+
+function workspaceScopeLabel(workspaceIds, workspaces = []) {
+  if (!Array.isArray(workspaceIds)) return "All";
+  if (workspaceIds.length === 0) return "None";
+  const names = workspaceIds.map(
+    (id) => workspaces.find((ws) => ws.id === id)?.name || `#${id}`
+  );
+  return names.join(", ");
+}
+
+function expiryLabel(expiresAt) {
+  if (!expiresAt) return "Never";
+  const when = moment(expiresAt);
+  if (when.isBefore(moment()))
+    return (
+      <span className="text-red-400 light:text-red-600">
+        Expired {when.format("ll")}
+      </span>
+    );
+  return when.format("ll");
+}
+
+export default function ApiKeyRow({
+  apiKey,
+  removeApiKey,
+  multiUser = false,
+  workspaces = [],
+  onEdit = null,
+}) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const handleDelete = async () => {
@@ -45,6 +86,24 @@ export default function ApiKeyRow({ apiKey, removeApiKey }) {
             {apiKey.secret}
           </code>
         </td>
+        {multiUser && (
+          <td className="px-6 py-3 text-left align-middle">
+            {apiKey.owner?.username || (
+              <span className="text-amber-400 light:text-amber-600">
+                No owner
+              </span>
+            )}
+          </td>
+        )}
+        <td className="px-6 py-3 text-left align-middle">
+          {workspaceScopeLabel(keyWorkspaceIds(apiKey), workspaces)}
+        </td>
+        <td className="px-6 py-3 whitespace-nowrap align-middle">
+          {expiryLabel(apiKey.expiresAt)}
+        </td>
+        <td className="px-6 py-3 whitespace-nowrap align-middle">
+          {apiKey.lastUsedAt ? moment(apiKey.lastUsedAt).fromNow() : "Never"}
+        </td>
         <td className="px-6 py-3 text-left align-middle">
           {apiKey.createdBy?.username || "--"}
         </td>
@@ -60,6 +119,14 @@ export default function ApiKeyRow({ apiKey, removeApiKey }) {
             >
               {copied ? t("api.row.copied") : t("api.row.copy")}
             </button>
+            {onEdit && (
+              <button
+                onClick={onEdit}
+                className="text-xs font-medium text-white/80 light:text-black/80 rounded-lg hover:text-white hover:light:text-gray-500 px-2 py-1 hover:bg-white hover:bg-opacity-10"
+              >
+                Edit
+              </button>
+            )}
             <button
               onClick={handleDelete}
               className="text-xs font-medium text-white/80 light:text-black/80 hover:light:text-red-500 hover:text-red-300 rounded-lg px-2 py-1 hover:bg-white hover:light:bg-red-50 hover:bg-opacity-10"

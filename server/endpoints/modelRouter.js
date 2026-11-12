@@ -8,6 +8,8 @@ const {
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
+const { EventLogs } = require("../models/eventLogs");
+const { updateENV } = require("../utils/helpers/updateENV");
 
 function modelRouterEndpoints(app) {
   if (!app) return;
@@ -95,13 +97,26 @@ function modelRouterEndpoints(app) {
     async (request, response) => {
       try {
         const { id } = request.params;
-        const success = await ModelRouter.delete(Number(id));
-        if (!success)
-          return response
-            .status(400)
-            .json({ success: false, error: "Failed to delete router." });
+        const user = await userFromSession(request, response);
+        const result = await ModelRouter.delete(Number(id));
+        if (!result.success)
+          return response.status(400).json({
+            success: false,
+            error: result.error || "Failed to delete router.",
+          });
+        // Workspaces and policies were unbound in the transaction; the system
+        // router setting lives in .env, so it is cleared here.
+        if (result.unbound.systemRouter)
+          await updateENV({ ModelRouterId: "" }, false, user?.id);
         ModelRouterService.invalidateRouter(Number(id));
-        return response.status(200).json({ success: true });
+        await EventLogs.logEvent(
+          "model_router_deleted",
+          { routerId: Number(id), ...result.unbound },
+          user?.id
+        );
+        return response
+          .status(200)
+          .json({ success: true, unbound: result.unbound });
       } catch (e) {
         console.error(e);
         response.sendStatus(500);
@@ -147,9 +162,12 @@ function modelRouterEndpoints(app) {
             .status(400)
             .json({ success: false, error: "ruleUpdates must be an array." });
 
-        const { success, error } =
-          await ModelRouterRule.reorderRules(ruleUpdates);
-        if (error) return response.status(400).json({ success, error });
+        const { success, error, notFound } = await ModelRouterRule.reorderRules(
+          ruleUpdates,
+          Number(id)
+        );
+        if (error)
+          return response.status(notFound ? 404 : 400).json({ success, error });
         ModelRouterService.invalidateRouter(Number(id));
         return response.status(200).json({ success });
       } catch (e) {
@@ -166,11 +184,13 @@ function modelRouterEndpoints(app) {
       try {
         const { id, ruleId } = request.params;
         const data = reqBody(request);
-        const { rule, error } = await ModelRouterRule.update(
+        const { rule, error, notFound } = await ModelRouterRule.update(
           Number(ruleId),
-          data
+          data,
+          Number(id)
         );
-        if (error) return response.status(400).json({ rule, error });
+        if (error)
+          return response.status(notFound ? 404 : 400).json({ rule, error });
         ModelRouterService.invalidateRouter(Number(id));
         return response.status(200).json({ rule });
       } catch (e) {
@@ -186,11 +206,14 @@ function modelRouterEndpoints(app) {
     async (request, response) => {
       try {
         const { id, ruleId } = request.params;
-        const success = await ModelRouterRule.delete(Number(ruleId));
+        const success = await ModelRouterRule.delete(
+          Number(ruleId),
+          Number(id)
+        );
         if (!success)
           return response
-            .status(400)
-            .json({ success: false, error: "Failed to delete rule." });
+            .status(404)
+            .json({ success: false, error: "Rule not found in this router." });
         ModelRouterService.invalidateRouter(Number(id));
         return response.status(200).json({ success: true });
       } catch (e) {

@@ -4,10 +4,13 @@ import paths from "@/utils/paths";
 import useQuery from "@/hooks/useQuery";
 import System from "@/models/system";
 import { AUTH_TIMESTAMP, AUTH_TOKEN, AUTH_USER } from "@/utils/constants";
+import { safeRedirectPath } from "@/utils/safeRedirect";
 
 export default function SimpleSSOPassthrough() {
   const query = useQuery();
-  const redirectPath = query.get("redirectTo") || paths.home();
+  // Only follow same-origin paths, so a crafted login link cannot send the
+  // user to another site after sign-in (F-11).
+  const redirectPath = safeRedirectPath(query.get("redirectTo"), paths.home());
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
 

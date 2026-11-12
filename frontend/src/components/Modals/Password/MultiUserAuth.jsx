@@ -9,6 +9,7 @@ import RecoveryCodeModal from "@/components/Modals/DisplayRecoveryCodeModal";
 import { useTranslation } from "react-i18next";
 import { t } from "i18next";
 import PasswordInput from "@/components/lib/PasswordInput";
+import GoogleSignInButton from "./GoogleSignInButton";
 
 const RecoveryForm = ({ onSubmit, setShowRecoveryForm }) => {
   const [username, setUsername] = useState("");
@@ -332,6 +333,7 @@ export default function MultiUserAuth() {
           </div>
         </div>
         <div className="flex items-center px-12 mt-9 space-x-2 w-full flex-col gap-y-6">
+          <GoogleSignInButton />
           <button
             disabled={loading}
             type="submit"

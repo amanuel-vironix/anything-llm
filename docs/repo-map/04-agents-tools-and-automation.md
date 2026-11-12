@@ -840,6 +840,30 @@ extraction are **state machines** driven by a cron + queue.
   (`aibitat/plugins/index.js:1-56`); `file-history` (writes `history/chat-history-*.json`) and
   `cli.js` are only used by `aibitat/example/*`.
 
+### P-AGENT-36 — Agent websocket identity check
+- **Actor and preconditions:** the browser opening `/agent-invocation/:uuid`.
+- **Steps:** the client sends its session token as the second websocket subprotocol (`["anythingllm.auth", token]`, `frontend/src/components/WorkspaceChat/ChatContainer/index.jsx`). `authenticateSessionToken` checks it (`server/endpoints/agentWebsocket.js:38`); on failure the socket gets `wssFailure` and closes (LOG `agent_ws_rejected` `no_valid_session`). `AgentHandler` then checks, before claiming the invocation, that in multi-user mode the caller is the invocation's user (`server/utils/agents/index.js:610`, LOG `agent_ws_rejected` `other_user`) and that the invocation is under 10 minutes old (`INVOCATION_TTL_MS`, `:38,633`, decision 25).
+- **State changes:** none on refusal.
+- **Side effects:** WS (`wssFailure`), LOG.
+- **Notes:** fixes F-04. Works with or without the single-use claim from `claude/state-machine-audit-23070d` (SMF-06).
+
+### P-AGENT-37 — Access policy on agent sessions (web, API, Telegram)
+- **Actor and preconditions:** a user with an access policy. Telegram runs only in single-user mode, so it never has a policy.
+- **Steps:** `#providerSetupAndCheck` (`server/utils/agents/index.js:512`, `server/utils/agents/ephemeral.js:227`) refuses when the policy has `allow_agents=false` (LOG `tool_refused_by_policy` `allow_agents`), routes through the policy's router when `router_id` is set, and otherwise applies `enforceAllowedSelection` to the agent provider and model; per-turn router re-resolution keeps the same guard. An explicit `@agent` in chat with agents off returns an abort message (`server/utils/chats/agents.js:109`); automatic mode falls through to normal chat.
+- **Side effects:** LOG (`tool_refused_by_policy`, `model_refused_by_policy`).
+
+### P-AGENT-38 — Agent tool and MCP filtering
+- **Actor and preconditions:** a user with a tool rule from (in order) their policy's `agent_tools`, their team policy's, or the role default in `system_settings.agent_tool_role_policy`. No rule, no user (single-user, legacy keys) or an admin without a policy: every tool.
+- **Steps:** `agentToolAccessForUser` (`server/utils/accessPolicy/agentTools.js:248`) returns `isAllowed`, `filterFunctions` and an MCP tool filter that also applies the server's `anythingllm.allowedRoles`. `WORKSPACE_AGENT.getDefinition` filters the function list; `#attachPluginByName` (`server/utils/agents/index.js:686`) and the ephemeral `#attachPlugins` (`server/utils/agents/ephemeral.js:308`) re-check each entry (LOG `tool_refused_by_policy` `agent_tools`) and pass the MCP filter to `convertServerToolsToPlugins`; dead MCP servers (closed transport) are skipped.
+- **Notes:** the chat UI's tool listing uses admin-only endpoints, so admin listings stay unfiltered.
+
+### P-AGENT-39 — Role defaults and sharing a tool with teams
+- **Actor and preconditions:** admin, multi-user mode.
+- **Steps:** GET/POST `/admin/agent-tool-role-policy` (`server/endpoints/accessPolicies.js:172,187`) reads and writes `system_settings.agent_tool_role_policy` (`{manager, default}` rules). GET/POST `/admin/agent-tool-sharing` (`:222,236`) reports and sets which teams are offered a tool: `setToolTeams` (`server/utils/accessPolicy/toolSharing.js:108`) edits each team policy's rule, starting from the `default` role rule for a team with none, and creates a policy (no model restriction) for a team without one.
+- **State changes:** `system_settings.agent_tool_role_policy`; `access_policies.agent_tools`; `access_policies` row created; `teams.policy_id` set.
+- **Side effects:** DB, LOG (`role_default_updated`, `policy_updated`).
+- **Notes:** a policy shared by other teams or users changes for them too; the response lists those as `sharedPolicies`.
+
 ## 5. State machines
 
 ### Scheduled job run (`scheduled_job_runs.status`)
@@ -950,15 +974,19 @@ Code: `websocket.js:254-364`, `http-socket.js:118-230`, `run-scheduled-job.js:77
 | SE-AGENT-42 | P-AGENT-31 | NET:llm-provider | Observer + Reflector runs over the last 20 chats | `jobs/helpers/memory-extraction-utils.js:135,263` | no | |
 | SE-AGENT-43 | P-AGENT-31/32 | DB | `memories` create/update/delete/promote/demote; `workspace_chats.memoryProcessed` | `models/memory.js:98-260,345`; `models/workspaceChats.js:306` | yes (UI delete) | |
 | SE-AGENT-44 | P-AGENT-31 | LOG | worker log now holds counts and ids only (F-41 fixed in 912a0c28); `audit_events: memory.extracted` (created, updated, candidates counts) with a job actor acting on behalf of the user | `server/jobs/extract-memories.js:135,137,185` | no | no memory text in logs or audit rows |
-| SE-AGENT-48 | P-AGENT-28 | LOG | `audit_events: scheduled_job.created` / `updated` / `deleted` / `run` (trigger, approve and reject runs) | `server/endpoints/scheduledJobs.js:109,201,287,315,364,396` | no | no row before |
-| SE-AGENT-49 | P-AGENT-31/32 | LOG | `audit_events: memory.created` / `updated` (also promote and demote) / `deleted` | `server/endpoints/memory.js:95,134,164,195,232` | no | no row before |
-| SE-AGENT-50 | MCP server toggle, delete, tool toggle (UI) | LOG | `audit_events: mcp.server_started` / `mcp.server_stopped` / `mcp.server_removed` / `mcp.tool_toggled` | `server/endpoints/mcpServers.js:71,106,145` | no | the `/v1/mcp-servers` equivalents are in SE-EXT-58 |
-| SE-AGENT-51 | agent flows | LOG | `audit_events: flow.created` / `flow.updated` / `flow.deleted` | `server/endpoints/agentFlows.js:43,174,225` | no | no row before |
-| SE-AGENT-52 | imported agent plugins, skill whitelist | LOG | `audit_events: skill.enabled` / `skill.disabled` / `skill.configured` / `skill.removed`; `agent.whitelist_added` | `server/endpoints/experimental/imported-agent-plugins.js:27,59,92`; `server/endpoints/agentSkillWhitelist.js:95` | no | no row before |
-| SE-AGENT-53 | agent websocket session (P-AGENT-14 area) | LOG | not recorded: `agent.session_started` / `agent.session_ended` are declared pending for the access-policy branch (`server/utils/audit/routes/held.js`) | `server/endpoints/agentWebsocket.js` | n/a | |
 | SE-AGENT-45 | P-AGENT-33 | DB / FS | `users.web_push_subscription_config` or `storage/push-notifications/primary-subscription.json`; `vapid-keys.json` at boot | `PushNotifications/index.js:146-166,201-222` | overwrite | |
 | SE-AGENT-46 | P-AGENT-34 | FS | delete unreferenced files > 1 h in `storage/generated-files`, `storage/generated-images` | `jobs/cleanup-generated-files.js:22-51`; `jobs/cleanup-generated-images.js:18-45` | no | partial scan error → over-deletion |
 | SE-AGENT-47 | E-AGENT-22/23/24 | TIME | Bree jobs (cleanup 8/9/12 hr, memory extraction 3 hr), scheduled-job timers | `BackgroundWorkers/index.js:29-61,106-143,178-197,274-309` | yes (setting toggle) | |
+| SE-AGENT-48 | P-AGENT-36 | WS/LOG | `wssFailure` + close; `agent_ws_rejected` | `server/endpoints/agentWebsocket.js:38`, `server/utils/agents/index.js:610` | no | |
+| SE-AGENT-49 | P-AGENT-37/38 | LOG | `tool_refused_by_policy`, `model_refused_by_policy` | `server/utils/accessPolicy/index.js:110,133`, `server/utils/agents/index.js:686` | no | fire-and-forget |
+| SE-AGENT-50 | P-AGENT-39 | DB | `system_settings.agent_tool_role_policy` upsert | `server/endpoints/accessPolicies.js:187` | yes | LOG `role_default_updated` |
+| SE-AGENT-51 | P-AGENT-39 | DB | `access_policies.agent_tools` update / policy create, `teams.policy_id` set | `server/utils/accessPolicy/toolSharing.js:108` | yes | LOG `policy_updated` |
+| SE-AGENT-52 | P-AGENT-28 | LOG | `audit_events: scheduled_job.created` / `updated` / `deleted` / `run` (trigger, approve and reject runs) | `server/endpoints/scheduledJobs.js:109,201,287,315,364,396` | no | no row before |
+| SE-AGENT-53 | P-AGENT-31/32 | LOG | `audit_events: memory.created` / `updated` (also promote and demote) / `deleted` | `server/endpoints/memory.js:95,134,164,195,232` | no | no row before |
+| SE-AGENT-54 | MCP server toggle, delete, tool toggle (UI) | LOG | `audit_events: mcp.server_started` / `mcp.server_stopped` / `mcp.server_removed` / `mcp.tool_toggled` | `server/endpoints/mcpServers.js:71,106,145` | no | the `/v1/mcp-servers` equivalents are in SE-EXT-58 |
+| SE-AGENT-55 | agent flows | LOG | `audit_events: flow.created` / `flow.updated` / `flow.deleted` | `server/endpoints/agentFlows.js:43,174,225` | no | no row before |
+| SE-AGENT-56 | imported agent plugins, skill whitelist | LOG | `audit_events: skill.enabled` / `skill.disabled` / `skill.configured` / `skill.removed`; `agent.whitelist_added` | `server/endpoints/experimental/imported-agent-plugins.js:27,59,92`; `server/endpoints/agentSkillWhitelist.js:95` | no | no row before |
+| SE-AGENT-57 | agent websocket session (P-AGENT-14 area) | LOG | not recorded: `agent.session_started` / `agent.session_ended` are declared pending for the access-policy branch (`server/utils/audit/routes/held.js`) | `server/endpoints/agentWebsocket.js` | n/a | |
 
 ## 7. Cross-domain links
 

@@ -69,11 +69,15 @@ const {
   chatHistoryViewable,
 } = require("../utils/middleware/chatHistoryViewable");
 const {
-  simpleSSOEnabled,
+  simpleSSOOrOidcToken,
+  isOidcLoginToken,
   simpleSSOLoginDisabled,
 } = require("../utils/middleware/simpleSSOEnabled");
+const { passwordLoginRestricted } = require("../utils/auth/oidcSettings");
+const { oidcSessionExpiry } = require("../utils/auth/oidc");
 const { TemporaryAuthToken } = require("../models/temporaryAuthToken");
 const { SystemPromptVariables } = require("../models/systemPromptVariables");
+const { Team } = require("../models/team");
 const { isReservedCommand } = require("../utils/chats");
 const { AgentSkillWhitelist } = require("../models/agentSkillWhitelist");
 const { Memory } = require("../models/memory");
@@ -280,6 +284,32 @@ function systemEndpoints(app) {
           return;
         }
 
+        // With Google sign-in on and password sign-in turned off, passwords
+        // still work for admins, so a Google misconfiguration cannot lock
+        // everyone out. Checked after the password, like suspension, so it
+        // reveals nothing to someone without the right password.
+        if (
+          existingUser.role !== ROLES.admin &&
+          (await passwordLoginRestricted())
+        ) {
+          await EventLogs.logEvent(
+            "failed_login_password_disabled",
+            {
+              ip: request.ip || "Unknown IP",
+              username: existingUser.username,
+            },
+            existingUser.id
+          );
+          response.status(200).json({
+            user: null,
+            valid: false,
+            token: null,
+            message:
+              "[006] Password sign-in is turned off. Sign in with Google instead.",
+          });
+          return;
+        }
+
         await Telemetry.sendTelemetry(
           "login_event",
           { multiUserMode: false },
@@ -362,46 +392,70 @@ function systemEndpoints(app) {
 
   app.get(
     "/request-token/sso/simple",
-    [simpleSSOEnabled],
+    [simpleSSOOrOidcToken],
     async (request, response) => {
-      const { token: tempAuthToken } = request.query;
-      const { sessionToken, token, error } =
-        await TemporaryAuthToken.validate(tempAuthToken);
-
-      if (error) {
-        await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {
-          ip: request.ip || "Unknown IP",
-          multiUserMode: true,
-        });
-        return response.status(401).json({
-          valid: false,
-          token: null,
-          message: `[001] An error occurred while validating the token: ${error}`,
-        });
+      try {
+        await swapTemporaryToken(request, response);
+      } catch (error) {
+        console.error("FAILED TO SWAP TEMPORARY AUTH TOKEN.", error.message);
+        response.sendStatus(500).end();
       }
-
-      await Telemetry.sendTelemetry(
-        "login_event",
-        { multiUserMode: true },
-        token.user.id
-      );
-      await EventLogs.logEvent(
-        "login_event",
-        {
-          ip: request.ip || "Unknown IP",
-          username: token.user.username || "Unknown user",
-        },
-        token.user.id
-      );
-
-      response.status(200).json({
-        valid: true,
-        user: User.filterFields(token.user),
-        token: sessionToken,
-        message: null,
-      });
     }
   );
+
+  /**
+   * Swaps a one-time token (Simple SSO or Google sign-in) for a session.
+   * Called only from the route above, which turns any throw into a 500.
+   */
+  async function swapTemporaryToken(request, response) {
+    const { token: tempAuthToken } = request.query;
+    const fromOidc = isOidcLoginToken(tempAuthToken);
+    const validated = await TemporaryAuthToken.validate(tempAuthToken);
+    const { token, error } = validated;
+    // Sessions started through Google sign-in are shorter
+    // (OIDC_SESSION_EXPIRY, default 12h), so disabling someone's Google
+    // account ends their AnythingLLM access within that time.
+    const sessionToken =
+      fromOidc && !error
+        ? makeJWT(
+            { id: token.user.id, username: token.user.username },
+            oidcSessionExpiry()
+          )
+        : validated.sessionToken;
+
+    if (error) {
+      await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {
+        ip: request.ip || "Unknown IP",
+        multiUserMode: true,
+      });
+      return response.status(401).json({
+        valid: false,
+        token: null,
+        message: `[001] An error occurred while validating the token: ${error}`,
+      });
+    }
+
+    await Telemetry.sendTelemetry(
+      "login_event",
+      { multiUserMode: true },
+      token.user.id
+    );
+    await EventLogs.logEvent(
+      "login_event",
+      {
+        ip: request.ip || "Unknown IP",
+        username: token.user.username || "Unknown user",
+      },
+      token.user.id
+    );
+
+    response.status(200).json({
+      valid: true,
+      user: User.filterFields(token.user),
+      token: sessionToken,
+      message: null,
+    });
+  }
 
   app.post(
     "/system/recover-account",
@@ -854,7 +908,9 @@ function systemEndpoints(app) {
         await EventLogs.logEvent("multi_user_mode_enabled", {}, user?.id);
         response.status(200).json({ success: !!user, error });
       } catch (e) {
-        await User.delete({});
+        // Rolling back to single-user mode removes every user, so the
+        // last-admin guard does not apply here.
+        await User.delete({}, { allowNoActiveAdmin: true });
         await SystemSettings._updateSettings({
           multi_user_mode: false,
         });
@@ -1242,11 +1298,20 @@ function systemEndpoints(app) {
           return response.sendStatus(401).end();
         }
 
-        const { name = null } = reqBody(request);
-        const { apiKey, error } = await ApiKey.create(null, name);
+        // Single-user mode has no users to own a key; a key can still be narrowed
+        // to some workspaces and given an expiry.
+        const {
+          name = null,
+          workspaceIds = null,
+          expiresAt = null,
+        } = reqBody(request);
+        const { apiKey, error } = await ApiKey.create(null, name, {
+          workspaceIds,
+          expiresAt,
+        });
         await EventLogs.logEvent(
           "api_key_created",
-          { name: apiKey?.name },
+          { name: apiKey?.name, workspaceIds, expiresAt },
           response?.locals?.user?.id
         );
         return response.status(200).json({
@@ -1587,7 +1652,13 @@ function systemEndpoints(app) {
           description: String(description),
         };
 
-        const preset = await SlashCommandPresets.create(user?.id, presetData);
+        // "Share with my team" sets the preset's team to the creator's team.
+        const teamId = reqBody(request).shareWithTeam
+          ? (await Team.membershipFor(user?.id))?.team_id ?? 0
+          : 0;
+        const preset = await SlashCommandPresets.create(user?.id, presetData, {
+          teamId,
+        });
         if (!preset) {
           return response
             .status(500)
@@ -1620,11 +1691,11 @@ function systemEndpoints(app) {
           });
         }
 
-        // Valid user running owns the preset if user session is valid.
-        const ownsPreset = await SlashCommandPresets.get({
-          userId: user?.id ?? null,
-          id: Number(slashCommandId),
-        });
+        // The owner, an admin, or a lead of the team it is shared with may edit it.
+        const ownsPreset = await SlashCommandPresets.editableBy(
+          slashCommandId,
+          user
+        );
         if (!ownsPreset)
           return response.status(404).json({ message: "Preset not found" });
 
@@ -1633,6 +1704,16 @@ function systemEndpoints(app) {
           prompt: String(prompt),
           description: String(description),
         };
+        // Only the owner can share or unshare their preset.
+        const { shareWithTeam } = reqBody(request);
+        if (
+          typeof shareWithTeam === "boolean" &&
+          user &&
+          ownsPreset.userId === Number(user.id)
+        )
+          updates.team_id = shareWithTeam
+            ? (await Team.membershipFor(user.id))?.team_id ?? 0
+            : 0;
 
         const preset = await SlashCommandPresets.update(
           Number(slashCommandId),
@@ -1655,11 +1736,11 @@ function systemEndpoints(app) {
         const { slashCommandId } = request.params;
         const user = await userFromSession(request, response);
 
-        // Valid user running owns the preset if user session is valid.
-        const ownsPreset = await SlashCommandPresets.get({
-          userId: user?.id ?? null,
-          id: Number(slashCommandId),
-        });
+        // The owner, an admin, or a lead of the team it is shared with may delete it.
+        const ownsPreset = await SlashCommandPresets.editableBy(
+          slashCommandId,
+          user
+        );
         if (!ownsPreset)
           return response
             .status(403)
@@ -1680,7 +1761,10 @@ function systemEndpoints(app) {
     async (request, response) => {
       try {
         const user = await userFromSession(request, response);
-        const variables = await SystemPromptVariables.getAll(user?.id);
+        // Admins see every team's variables so they can manage them.
+        const variables = await SystemPromptVariables.getAll(user?.id, {
+          allTeams: user?.role === ROLES.admin,
+        });
         response.status(200).json({ variables });
       } catch (error) {
         console.error("Error fetching system prompt variables:", error);
@@ -1694,11 +1778,36 @@ function systemEndpoints(app) {
 
   app.post(
     "/system/prompt-variables",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    [validatedRequest, flexUserRoleValid([ROLES.all])],
     async (request, response) => {
       try {
         const user = await userFromSession(request, response);
-        const { key, value, description = null } = reqBody(request);
+        const {
+          key,
+          value,
+          description = null,
+          shareWithTeam = false,
+          teamId = null,
+        } = reqBody(request);
+
+        // Admins (and single-user mode) create global variables, or team ones with
+        // `teamId`. A team lead creates variables shared with their own team only.
+        let variableTeamId = null;
+        if (user && user.role !== ROLES.admin) {
+          const membership = await Team.membershipFor(user.id);
+          if (!membership || membership.role !== "lead" || !shareWithTeam)
+            return response.status(403).json({
+              success: false,
+              error: "Only admins and team leads can create variables.",
+            });
+          variableTeamId = membership.team_id;
+        } else if (user && teamId) {
+          if (!(await Team.get({ id: Number(teamId) })))
+            return response
+              .status(400)
+              .json({ success: false, error: "That team does not exist." });
+          variableTeamId = Number(teamId);
+        }
 
         if (!key || !value) {
           return response.status(400).json({
@@ -1712,6 +1821,7 @@ function systemEndpoints(app) {
           value,
           description,
           userId: user?.id || null,
+          teamId: variableTeamId,
         });
 
         response.status(200).json({
@@ -1730,11 +1840,17 @@ function systemEndpoints(app) {
 
   app.put(
     "/system/prompt-variables/:id",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    [validatedRequest, flexUserRoleValid([ROLES.all])],
     async (request, response) => {
       try {
         const { id } = request.params;
         const { key, value, description = null } = reqBody(request);
+        // Admins edit any variable; team leads only their team's.
+        const user = await userFromSession(request, response);
+        if (!(await SystemPromptVariables.editableBy(id, user)))
+          return response
+            .status(404)
+            .json({ success: false, error: "Variable not found" });
 
         if (!key || !value) {
           return response.status(400).json({
@@ -1772,10 +1888,16 @@ function systemEndpoints(app) {
 
   app.delete(
     "/system/prompt-variables/:id",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    [validatedRequest, flexUserRoleValid([ROLES.all])],
     async (request, response) => {
       try {
         const { id } = request.params;
+        const user = await userFromSession(request, response);
+        if (!(await SystemPromptVariables.editableBy(id, user)))
+          return response.status(404).json({
+            success: false,
+            error: "System prompt variable not found or could not be deleted",
+          });
         const success = await SystemPromptVariables.delete(Number(id));
 
         if (!success) {

@@ -26,7 +26,7 @@ import SpeechRecognition, {
 import { ChatTooltips } from "./ChatTooltips";
 import { MetricsProvider } from "./ChatHistory/HistoricalMessage/Actions/RenderMetrics";
 import useChatContainerQuickScroll from "@/hooks/useChatContainerQuickScroll";
-import { PENDING_HOME_MESSAGE } from "@/utils/constants";
+import { AUTH_TOKEN, PENDING_HOME_MESSAGE } from "@/utils/constants";
 import { clearPromptInputDraft } from "@/hooks/usePromptInputStorage";
 import { getSessionReasoningEffort } from "@/utils/chat/reasoningEffort";
 import { safeJsonParse } from "@/utils/request";
@@ -381,8 +381,12 @@ export default function ChatContainer({
     function handleWSS() {
       try {
         if (!socketId || !!websocket) return;
+        // Browsers can't set headers on a WebSocket, so the session token rides as a
+        // sub-protocol; the server checks it belongs to the invoking user.
+        const authToken = window.localStorage.getItem(AUTH_TOKEN);
         socket = new WebSocket(
-          `${websocketURI()}/api/agent-invocation/${socketId}`
+          `${websocketURI()}/api/agent-invocation/${socketId}`,
+          authToken ? ["anythingllm.auth", authToken] : undefined
         );
         socket.supportsAgentStreaming = false;
 

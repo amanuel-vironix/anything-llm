@@ -620,6 +620,29 @@ No workspace pfp endpoint exists at this commit. `workspaces.pfpFilename` exists
 (`schema.prisma:136`), but no server code reads or writes it. The only pfp routes are the user ones
 (`system.js:815`, `844`, `935`), covered in AUTH/ADMIN.
 
+### P-CHAT-31 — Access policy on the chat model
+- **Actor and preconditions:** multi-user mode, a user whose own or team access policy is set (`users.policy_id`, else `teams.policy_id` of their team). No policy: unchanged behavior.
+- **Steps:** `resolveProviderConnector` (`server/utils/helpers/index.js:749`) reads the policy with `getPolicyForUser`. Without a router: builds the connector, then `enforceAllowedSelection` (`:760`; `server/utils/accessPolicy/index.js:110`) keeps an allowed model, substitutes the policy default for a disallowed one, or throws `AccessPolicyError` when there is no allowed default. With a router (the workspace's, or the policy's `router_id`, which wins): the router gets a selection guard that applies the same rule to the routed model before its delegate is built (`server/utils/AiProviders/modelRouter/index.js`).
+- **Reads:** `users`, `team_members`, `teams`, `access_policies`.
+- **State changes:** none.
+- **Side effects:** LOG `model_refused_by_policy` on refusal (fire-and-forget, `server/utils/accessPolicy/index.js:133`).
+- **Failure and edge paths:** the refusal reaches the user as the chat error text (`server/utils/chats/stream.js`, no "Model router error:" prefix); a lookup failure fails closed (throws).
+- **Notes:** `allowed_models` null = no model restriction (a tools-only policy); `[]` = nothing. Applies to web, API, OpenAI-compatible and mobile chat (all go through `resolveProviderConnector`).
+
+### P-CHAT-32 — Team workspaces
+- **Actor and preconditions:** multi-user mode, a non-admin non-manager user on a team.
+- **Steps:** `Workspace.getWithUser` / `whereWithUser` match `AND [clause, OR [direct membership, team_id = user's team]]` (`server/models/workspace.js:18`). A team lead creates team workspaces (POST `/teams/:teamId/workspaces/new`, `server/endpoints/teams.js:332`) and edits safe settings (prompt, temperature, history, similarity, topN, chat mode, refusal text; not provider or model) at `:363`. Admins move a workspace between teams or detach it (POST `/admin/workspaces/:slug/team`, `:103`; `Workspace.setTeam`, `server/models/workspace.js:578`); `team_id` is not in `Workspace.writable`, so normal update routes can't change it.
+- **State changes:** `workspaces` row created with `team_id`; `workspaces.team_id: old → new`; workspace settings updated.
+- **Side effects:** DB (`workspaces`), LOG (`team_workspace_created`, `team_workspace_updated`, `workspace_team_changed`).
+- **Notes:** admins and managers still see every workspace (decision 29). Deleting a team makes its workspaces admin-only (decision 30). Leads can't read members' chats (decision 31).
+
+### P-CHAT-33 — Shared slash command presets and prompt variables
+- **Actor and preconditions:** multi-user mode, a user on a team.
+- **Steps:** creating a preset with `shareWithTeam` sets `team_id` to the creator's team (`server/endpoints/system.js`, POST `/system/slash-command-presets`). `SlashCommandPresets.getUserPresets` (`server/models/slashCommandsPresets.js:80`) returns the user's presets plus their team's; on the same command the personal one wins, then the user's own shared one. Edit/delete: owner, a lead of the preset's team, or an admin (`editableBy`, `:129`). Prompt variables: a variable with `team_id` is seen only by that team (`SystemPromptVariables.getAll`, `server/models/systemPromptVariables.js:146`); leads create (with `shareWithTeam`) and edit their team's; admins see and edit all (`editableBy`, `:219`).
+- **State changes:** `slash_command_presets.team_id`, `system_prompt_variables.team_id` set/cleared.
+- **Side effects:** DB.
+- **Notes:** the developer API's `grepAllSlashCommands` still applies every preset of every user (unchanged; see open questions).
+
 ---
 
 ## 4. Per-user scoping: where it holds and where it breaks
@@ -741,12 +764,16 @@ Hidden rows never become visible again through any CHAT endpoint.
 | SE-CHAT-45 | P-CHAT-28 | DB | `model_routers`, `model_router_rules` | `modelRouter.js:51`, `212`, `236`; `modelRouterRule.js:77`, `194`, `213`, `229` | yes | |
 | SE-CHAT-46 | P-CHAT-28 | CACHE | `invalidateRouter(:id)` | `router/index.js:112-121` | n/a | wrong router if `:ruleId` is not under `:id` |
 | SE-CHAT-47 | P-CHAT-28 | TEL | `model_router_created`, `model_router_rule_created` | `modelRouter.js:65`, `128` | no | |
-| SE-CHAT-48 | P-CHAT-03/06/07 | LOG | `audit_events: workspace.updated` (field names only) for update, suggested messages, prompt-history clear and delete | `server/endpoints/workspaces.js:123,756,1155,1192` | no | no row before |
-| SE-CHAT-49 | P-CHAT-17/18/19/20 | LOG | `audit_events: chat.hidden` (delete-chats, delete-edited-chats, hide one chat, fork cleanup), `chat.edited`, `chat.feedback`; thread routes record the same at `workspaceThreads.js:134,189,307` (`chat.hidden`) and `:355` (`chat.edited`) | `server/endpoints/workspaces.js:563,609,649,704,969` | no | no row before |
-| SE-CHAT-50 | P-CHAT-22/23 | LOG | `audit_events: thread.renamed`, `thread.deleted` (single and bulk) | `server/endpoints/workspaceThreads.js:256,116,174` | no | no row before |
-| SE-CHAT-51 | P-CHAT-26 | LOG | `audit_events: chat.viewed_other_user` (admin chat list), `chat.deleted` / `chat.bulk_deleted` | `server/endpoints/system.js:1395,1425,1431` | no | no row before |
-| SE-CHAT-52 | `POST /workspace/:slug/update-pin` (path ID not checked) | LOG | `audit_events: document.pinned` | `server/endpoints/workspaces.js:799` | no | no row before |
-| SE-CHAT-53 | P-CHAT-28 | LOG | model router CRUD: no row yet; `router.*` actions are declared as pending for the access-policy branch (`server/utils/audit/routes/held.js`) | `server/endpoints/modelRouter.js` | n/a | not recorded in this PR |
+| SE-CHAT-48 | P-CHAT-31 | LOG | `model_refused_by_policy` | `server/utils/accessPolicy/index.js:110,133` | no | fire-and-forget |
+| SE-CHAT-49 | P-CHAT-32 | DB | `workspaces` create with `team_id`, `team_id` change, lead settings update | `server/endpoints/teams.js:103,332,363` | yes | LOG `team_workspace_*`, `workspace_team_changed` |
+| SE-CHAT-50 | P-CHAT-33 | DB | `slash_command_presets.team_id`, `system_prompt_variables.team_id` | `server/endpoints/system.js` (preset and variable routes) | yes | no LOG |
+| SE-CHAT-51 | router delete | DB | `workspaces.router_id`/`chatProvider`/`agentProvider` cleared, `access_policies.router_id` → null, router deleted, in one transaction; `ModelRouterId` env cleared when it was the system router | `server/models/modelRouter.js:245`, `server/endpoints/modelRouter.js` | no | fixes F-50; LOG `model_router_deleted` |
+| SE-CHAT-52 | P-CHAT-03/06/07 | LOG | `audit_events: workspace.updated` (field names only) for update, suggested messages, prompt-history clear and delete | `server/endpoints/workspaces.js:123,756,1155,1192` | no | no row before |
+| SE-CHAT-53 | P-CHAT-17/18/19/20 | LOG | `audit_events: chat.hidden` (delete-chats, delete-edited-chats, hide one chat, fork cleanup), `chat.edited`, `chat.feedback`; thread routes record the same at `workspaceThreads.js:134,189,307` (`chat.hidden`) and `:355` (`chat.edited`) | `server/endpoints/workspaces.js:563,609,649,704,969` | no | no row before |
+| SE-CHAT-54 | P-CHAT-22/23 | LOG | `audit_events: thread.renamed`, `thread.deleted` (single and bulk) | `server/endpoints/workspaceThreads.js:256,116,174` | no | no row before |
+| SE-CHAT-55 | P-CHAT-26 | LOG | `audit_events: chat.viewed_other_user` (admin chat list), `chat.deleted` / `chat.bulk_deleted` | `server/endpoints/system.js:1395,1425,1431` | no | no row before |
+| SE-CHAT-56 | `POST /workspace/:slug/update-pin` (path ID not checked) | LOG | `audit_events: document.pinned` | `server/endpoints/workspaces.js:799` | no | no row before |
+| SE-CHAT-57 | P-CHAT-28 | LOG | model router CRUD: no row yet; `router.*` actions are declared as pending for the access-policy branch (`server/utils/audit/routes/held.js`) | `server/endpoints/modelRouter.js` | n/a | not recorded in this PR |
 
 ---
 

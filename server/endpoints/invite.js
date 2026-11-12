@@ -2,6 +2,7 @@ const { EventLogs } = require("../models/eventLogs");
 const { Invite } = require("../models/invite");
 const { User } = require("../models/user");
 const { reqBody } = require("../utils/http");
+const { passwordLoginRestricted } = require("../utils/auth/oidcSettings");
 const {
   simpleSSOLoginDisabledMiddleware,
 } = require("../utils/middleware/simpleSSOEnabled");
@@ -46,6 +47,9 @@ function inviteEndpoints(app) {
    *   code on two accounts gives them nothing beyond what the admin already granted: default-role
    *   access to the workspaces the admin selected for the invite.
    * - Admins can see, suspend, or delete every user from the Users page, so an extra account does not escape revocation.
+   *
+   * The claim is now a conditional write in one transaction with the user insert (Invite.claim),
+   * so one invite creates at most one account regardless (SMF-14).
    */
   app.post(
     "/invite/:code",
@@ -62,18 +66,34 @@ function inviteEndpoints(app) {
           return;
         }
 
-        const { user, error } = await User.create({
+        // A password account could not sign in while password sign-in is
+        // limited to admins; invitees accept with Google instead.
+        if (await passwordLoginRestricted()) {
+          response.status(403).json({
+            success: false,
+            error:
+              "Password accounts are turned off. Accept this invite with Google.",
+          });
+          return;
+        }
+
+        const { data, error: invalid } = User.prepareCreate({
           username,
           password,
           role: "default",
         });
+        if (invalid) {
+          response.status(200).json({ success: false, error: invalid });
+          return;
+        }
+
+        const { user, error } = await Invite.claim(code, data);
         if (!user) {
           console.error("Accepting invite:", error);
           response.status(200).json({ success: false, error });
           return;
         }
 
-        await Invite.markClaimed(invite.id, user);
         await EventLogs.logEvent(
           "invite_accepted",
           {

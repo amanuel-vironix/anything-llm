@@ -8,6 +8,11 @@ const {
   notifySessionExited,
 } = require("../utils/agents/aibitat/plugins/websocket");
 const { safeJsonParse } = require("../utils/http");
+const {
+  authenticateSessionToken,
+  tokenFromWebsocketRequest,
+} = require("../utils/middleware/validatedRequest");
+const { logPolicyRefusal } = require("../utils/accessPolicy");
 
 // Setup listener for incoming messages to relay to socket so it can be handled by agent plugin.
 function relayToSocket(message) {
@@ -28,8 +33,29 @@ function agentWebsocket(app) {
 
   app.ws("/agent-invocation/:uuid", async function (socket, request) {
     try {
+      // The invocation UUID alone is not a credential (F-04): the caller must present
+      // their session token, and in multi-user mode it must be the invoking user's.
+      const auth = await authenticateSessionToken(
+        tokenFromWebsocketRequest(request)
+      );
+      if (!auth.ok) {
+        logPolicyRefusal("agent_ws_rejected", { reason: "no_valid_session" });
+        socket.send(
+          JSON.stringify({
+            type: "wssFailure",
+            content: "Not authorized to use this agent session.",
+          })
+        );
+        socket.close();
+        return;
+      }
+
       const agentHandler = await new AgentHandler({
         uuid: String(request.params.uuid),
+        caller: {
+          multiUserMode: auth.multiUserMode,
+          userId: auth.user?.id ?? null,
+        },
       }).init();
 
       if (!agentHandler.invocation) {

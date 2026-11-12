@@ -24,6 +24,14 @@ async function validDeviceToken(request, response, next) {
     if (!device.approved)
       return response.status(400).json({ error: "Device not approved" });
 
+    // In multi-user mode a device must run as its own user, so that user's workspaces
+    // and access policy apply. A device with no user would otherwise see every
+    // workspace (SMF-09 case M5), so it is refused.
+    if (!device.user && (await SystemSettings.isMultiUserMode()))
+      return response
+        .status(403)
+        .json({ error: "Device is not linked to a user. Pair it again." });
+
     // If the device is associated with a user then we can associate it with the locals
     // so we can reuse it later.
     if (device.user) {

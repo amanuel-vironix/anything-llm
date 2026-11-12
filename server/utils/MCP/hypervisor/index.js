@@ -247,6 +247,30 @@ class MCPHypervisor {
   }
 
   /**
+   * Roles allowed to use an MCP server's tools, from `anythingllm.allowedRoles` in its
+   * config. Null means any role. Checked on top of access policy tool rules.
+   * @param {string} serverName - The name of the MCP server
+   * @returns {string[]|null}
+   */
+  getAllowedRoles(serverName) {
+    const config = this.mcpServerConfigs.find((s) => s.name === serverName);
+    const roles = config?.server?.anythingllm?.allowedRoles;
+    if (!Array.isArray(roles)) return null;
+    return roles.filter((role) => typeof role === "string");
+  }
+
+  /**
+   * Whether a server's client is still connected. A server whose process died stays in
+   * `mcps` (SMF-21); its transport marks it closed so its tools aren't offered.
+   * @param {string} serverName
+   * @returns {boolean}
+   */
+  isServerAlive(serverName) {
+    const mcp = this.mcps[serverName];
+    return !!mcp && !mcp.__anythingllmTransportClosed;
+  }
+
+  /**
    * Get the tool call timeout for an MCP server in milliseconds.
    * Set per server via `anythingllm.timeout` (in seconds) in the MCP config file.
    * Falls back to 60 seconds when unset or not a positive number.
@@ -537,7 +561,11 @@ class MCPHypervisor {
     const transport = await this.#setupServerTransport(server, serverType);
 
     // Add connection event listeners
-    transport.onclose = () => this.log(`${name} - Transport closed`);
+    transport.onclose = () => {
+      this.log(`${name} - Transport closed`);
+      // Keep the entry (restart and status reporting use it) but stop offering its tools.
+      mcp.__anythingllmTransportClosed = true;
+    };
     transport.onerror = (error) =>
       this.log(`${name} - Transport error:`, error);
     transport.onmessage = (message) =>

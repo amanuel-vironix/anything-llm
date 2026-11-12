@@ -11,6 +11,7 @@ export default function SlashCommandRow({
   onPublish,
   showMenu = false,
   highlighted = false,
+  shared = false,
 }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -57,6 +58,11 @@ export default function SlashCommandRow({
         <span className="text-white light:text-slate-900 shrink-0">
           {command}
         </span>
+        {shared && (
+          <span className="shrink-0 px-1 rounded text-[10px] leading-4 bg-sky-500/20 text-sky-300 light:text-sky-700">
+            Shared
+          </span>
+        )}
         <span className="text-zinc-400 light:text-slate-500 italic truncate">
           {description}
         </span>

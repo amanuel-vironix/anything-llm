@@ -10,6 +10,8 @@ import showToast from "@/utils/toast";
 import { PROMPT_INPUT_EVENT } from "@/components/WorkspaceChat/ChatContainer/PromptInput";
 import useToolsMenuItems from "../../useToolsMenuItems";
 import SlashCommandRow from "./SlashCommandRow";
+import useUser from "@/hooks/useUser";
+import useMyTeam from "@/hooks/useMyTeam";
 
 export default function SlashCommandsTab({
   sendCommand,
@@ -38,6 +40,12 @@ export default function SlashCommandsTab({
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [presetToPublish, setPresetToPublish] = useState(null);
   const [imageGenEnabled, setImageGenEnabled] = useState(false);
+  const { user } = useUser();
+  const { team: myTeam, role: myTeamRole } = useMyTeam();
+  // The owner edits their preset; a lead of its team or an admin may edit a shared one.
+  const canEditPreset = (preset) =>
+    preset.isOwner !== false ||
+    (preset.shared && (myTeamRole === "lead" || user?.role === "admin"));
 
   useEffect(() => {
     fetchPresets();
@@ -186,7 +194,8 @@ export default function SlashCommandsTab({
           onPublish={
             item.preset ? () => handlePublishPreset(item.preset) : undefined
           }
-          showMenu={!!item.preset}
+          showMenu={!!item.preset && canEditPreset(item.preset)}
+          shared={!!item.preset?.shared}
           highlighted={highlightedIndex === index}
         />
       ))}
@@ -211,6 +220,7 @@ export default function SlashCommandsTab({
         isOpen={isAddModalOpen}
         onClose={closeAddModal}
         onSave={handleSavePreset}
+        teamName={myTeam?.name || null}
       />
       {selectedPreset && (
         <EditPresetModal
@@ -222,6 +232,7 @@ export default function SlashCommandsTab({
           onSave={handleUpdatePreset}
           onDelete={handleDeletePreset}
           preset={selectedPreset}
+          teamName={myTeam?.name || null}
         />
       )}
       <PublishEntityModal

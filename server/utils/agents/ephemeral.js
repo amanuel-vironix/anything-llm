@@ -11,6 +11,15 @@ const { WorkspaceParsedFiles } = require("../../models/workspaceParsedFiles");
 const { DocumentManager } = require("../DocumentManager");
 const { safeJsonParse } = require("../http");
 const {
+  getPolicyForUser,
+  enforceAllowedSelection,
+  routerSelectionGuard,
+  enforceAgentsAllowed,
+  policyRouterWorkspace,
+  logPolicyRefusal,
+} = require("../accessPolicy");
+const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
+const {
   USER_AGENT,
   WORKSPACE_AGENT,
   agentSkillsFromSystemSettings,
@@ -40,6 +49,10 @@ class EphemeralAgentHandler extends AgentHandler {
   #prompt = null;
   /** @type {string[]} the functions to load into the agent (Aibitat plugins) */
   #funcsToLoad = [];
+  /** Tool access for the calling user (see utils/accessPolicy/agentTools); null until agents load. */
+  #toolAccess = null;
+  /** The calling user's access policy, resolved at init; null means no policy. */
+  #policy = null;
   /** @type {Array<{name: string, mime: string, contentString: string}>} attachments for multimodal support */
   #attachments = [];
   /** @type {Object[]} documents attached to this request, already parsed to text */
@@ -213,12 +226,32 @@ class EphemeralAgentHandler extends AgentHandler {
   }
 
   async #providerSetupAndCheck() {
+    // The calling user's access policy (own, then team). Null means today's behavior.
+    const policy = await getPolicyForUser(
+      this.#userId ? { id: Number(this.#userId) } : null
+    );
+    const refusal = { userId: this.#userId ? Number(this.#userId) : null };
+    enforceAgentsAllowed(policy, refusal);
+    // Kept for the per-turn router re-resolution in createAIbitat.
+    this.#policy = policy;
+
     this.provider = this.#workspace?.agentProvider ?? null;
     this.model = this.#fetchModel();
 
+    // A policy router sends this account's agent traffic through that router too.
+    if (policy?.router_id) this.provider = "anythingllm-router";
+
     // If provider resolved to model router, resolve the actual provider/model
     if (this.provider === "anythingllm-router") {
-      await this.#resolveRouterProvider();
+      await this.#resolveRouterProvider(null, policy);
+    } else if (policy) {
+      const selection = enforceAllowedSelection(
+        policy,
+        { provider: this.provider, model: this.model ?? null },
+        refusal
+      );
+      this.provider = selection.provider;
+      this.model = selection.model;
     }
 
     if (!this.provider)
@@ -227,18 +260,18 @@ class EphemeralAgentHandler extends AgentHandler {
     this.checkSetup();
   }
 
-  async #resolveRouterProvider(prompt = null) {
+  async #resolveRouterProvider(prompt = null, policy = this.#policy) {
     const { AnythingLLMModelRouter } = require("../AiProviders/modelRouter");
-    const routerWorkspace = this.#workspace?.router_id
-      ? this.#workspace
-      : {
-          ...this.#workspace,
-          router_id: process.env.MODEL_ROUTER_ID
-            ? Number(process.env.MODEL_ROUTER_ID)
-            : null,
-        };
+    const routerWorkspace = policyRouterWorkspace(this.#workspace, policy);
 
-    const router = new AnythingLLMModelRouter(routerWorkspace);
+    const router = new AnythingLLMModelRouter(
+      routerWorkspace,
+      null,
+      null,
+      routerSelectionGuard(policy, {
+        userId: this.#userId ? Number(this.#userId) : null,
+      })
+    );
     const { ModelRouterService } = require("../router");
     const workspace = this.#workspace;
     const user = this.#userId ? { id: this.#userId } : null;
@@ -272,6 +305,16 @@ class EphemeralAgentHandler extends AgentHandler {
 
   async #attachPlugins(args) {
     for (const name of this.#funcsToLoad) {
+      // Re-check each entry before attaching (defense in depth for the list filter).
+      if (this.#toolAccess && !this.#toolAccess.isAllowed(name)) {
+        this.log(`${name} is not allowed for this user. Skipping.`);
+        logPolicyRefusal(
+          "tool_refused_by_policy",
+          { tool: name, check: "agent_tools" },
+          this.#userId ? Number(this.#userId) : null
+        );
+        continue;
+      }
       // Load child plugin
       if (name.includes("#")) {
         const [parent, childPluginName] = name.split("#");
@@ -340,7 +383,8 @@ class EphemeralAgentHandler extends AgentHandler {
         const plugins =
           await new MCPCompatibilityLayer().convertServerToolsToPlugins(
             mcpPluginName,
-            this.aibitat
+            this.aibitat,
+            { toolFilter: this.#toolAccess?.mcpToolFilter ?? null }
           );
         if (!plugins) {
           this.log(
@@ -423,12 +467,16 @@ class EphemeralAgentHandler extends AgentHandler {
       )
     );
 
-    this.#funcsToLoad = [
+    // Same tool rule as the web agent (getDefinition filters with the same helper). The
+    // list itself differs on purpose: API agents have no one to answer clarifying
+    // questions, so those tools are left out here.
+    this.#toolAccess = await agentToolAccessForUser(user);
+    this.#funcsToLoad = this.#toolAccess.filterFunctions([
       ...(await agentSkillsFromSystemSettings()),
       ...ImportedPlugin.activeImportedPlugins(),
       ...AgentFlows.activeFlowPlugins(),
       ...(await new MCPCompatibilityLayer().activeMCPServers()),
-    ];
+    ]);
   }
 
   async init() {

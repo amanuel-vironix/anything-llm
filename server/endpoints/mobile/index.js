@@ -3,6 +3,7 @@ const { MobileDevice } = require("../../models/mobileDevice");
 const { handleMobileCommand } = require("./utils");
 const { validDeviceToken, validRegistrationToken } = require("./middleware");
 const { reqBody } = require("../../utils/http");
+const { User } = require("../../models/user");
 const {
   flexUserRoleValid,
   ROLES,
@@ -81,13 +82,30 @@ function mobileEndpoints(app) {
     }
   );
 
+  /**
+   * Issues a pairing link. The device runs as the user it is paired for (F-05): an
+   * admin pairs their own device, or another user's with `?userId=`. The device still
+   * needs an admin's approval before it can be used.
+   */
   app.get(
     "/mobile/connect-info",
     [validatedRequest, flexUserRoleValid([ROLES.admin])],
-    async (_request, response) => {
+    async (request, response) => {
       try {
+        let pairFor = response.locals?.user ?? null;
+        if (pairFor && request.query?.userId) {
+          const target = await User.get({ id: Number(request.query.userId) });
+          if (!target || target.suspended)
+            return response
+              .status(400)
+              .json({ error: "That user can't be paired with a device." });
+          pairFor = target;
+        }
         return response.status(200).json({
-          connectionUrl: MobileDevice.connectionURL(response.locals?.user),
+          connectionUrl: MobileDevice.connectionURL(pairFor),
+          pairedFor: pairFor
+            ? { id: pairFor.id, username: pairFor.username }
+            : null,
         });
       } catch (e) {
         console.error(e);

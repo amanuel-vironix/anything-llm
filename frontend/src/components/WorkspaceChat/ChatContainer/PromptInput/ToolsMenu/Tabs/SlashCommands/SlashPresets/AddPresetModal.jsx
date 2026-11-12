@@ -11,9 +11,16 @@ import Modal, {
 import { CMD_REGEX, isReservedCommand } from "./constants";
 import { useTranslation } from "react-i18next";
 import showToast from "@/utils/toast";
+import Toggle from "@/components/lib/Toggle";
 
-export default function AddPresetModal({ isOpen, onClose, onSave }) {
+export default function AddPresetModal({
+  isOpen,
+  onClose,
+  onSave,
+  teamName = null,
+}) {
   const [command, setCommand] = useState("");
+  const [shareWithTeam, setShareWithTeam] = useState(false);
   const { t } = useTranslation();
 
   const handleSubmit = async (e) => {
@@ -31,8 +38,12 @@ export default function AddPresetModal({ isOpen, onClose, onSave }) {
       command: `/${sanitizedCommand}`,
       prompt: form.get("prompt"),
       description: form.get("description"),
+      ...(teamName ? { shareWithTeam } : {}),
     });
-    if (saved) setCommand("");
+    if (saved) {
+      setCommand("");
+      setShareWithTeam(false);
+    }
   };
 
   const handleCommandChange = (e) => {
@@ -77,6 +88,16 @@ export default function AddPresetModal({ isOpen, onClose, onSave }) {
             autoComplete="off"
             required={true}
           />
+          {teamName && (
+            <Toggle
+              size="md"
+              variant="horizontal"
+              label="Share with my team"
+              description={`Everyone on ${teamName} can use this command.`}
+              enabled={shareWithTeam}
+              onChange={setShareWithTeam}
+            />
+          )}
         </ModalBody>
         <ModalFooter>
           <ModalSecondaryButton onClick={onClose} type="button">

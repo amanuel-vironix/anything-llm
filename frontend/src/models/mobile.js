@@ -13,10 +13,12 @@ import { baseHeaders } from "@/utils/request";
 const MobileConnection = {
   /**
    * Get the connection info for the mobile app.
-   * @returns {Promise<{connectionUrl: string|null}>} The connection info.
+   * @param {number|null} userId - Admin only: pair the device for this user instead.
+   * @returns {Promise<{connectionUrl: string|null, pairedFor?: {id: number, username: string}|null, error?: string}>} The connection info.
    */
-  getConnectionInfo: async function () {
-    return await fetch(`${API_BASE}/mobile/connect-info`, {
+  getConnectionInfo: async function (userId = null) {
+    const query = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+    return await fetch(`${API_BASE}/mobile/connect-info${query}`, {
       headers: baseHeaders(),
     })
       .then((res) => res.json())
