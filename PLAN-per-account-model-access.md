@@ -54,10 +54,41 @@ sharing; `89bf9290` MCP route test; then the admin UI and docs commits.
   with the audit branch, which maps them to its catalogue).
 - Not done here: HIPAA-mode team boundaries (managers losing instance-wide access), Google
   Group sync (`idp_group` is stored only), filtering the developer API's
-  `grepAllSlashCommands` (it still applies every user's presets), workspace-settings
-  "Owning team" field and sidebar grouping by team (see the UI notes below).
+  `grepAllSlashCommands` (it still applies every user's presets), Swagger docs not
+  regenerated for the new `/v1` fields (see "Admin UI" below for UI gaps).
 
-**Validation** (server): full suite `npx jest server/__tests__` passes (95 suites). One
+**Whole-change review** (fresh reviewer, server diff). Confirmed and fixed, each with a
+regression test and a planted bug it catches:
+- High: router LLM rules sent the prompt to the router's fallback (classifier) model
+  before the policy check. LLM rules are now skipped when the policy doesn't allow
+  that model (`routerSelectionGuard(...).allows`); API vector-search and the agent
+  memory search now pass the user. (`5778716d`)
+- Leads could remove themselves (lifting the team policy) and remove, demote or
+  promote managers and admins on their team; a leaver's shared presets stayed with
+  the team. (`9765ae8c`)
+- A workspace-scoped key could embed into other workspaces through `addToWorkspaces`
+  and call admin-only and document-library routes. (`2f2a8840`)
+- Role defaults failed open on a read error or bad JSON; saving them ignored a failed
+  write. (`73716c84`)
+- Tool sharing created deny policies for teams with no rule of their own, outside a
+  transaction. (`92ec5d3a`)
+- From the UI build: deleting a team made its prompt variables global (now deleted);
+  `api_key_created` was logged for failed creates. (`5778716d`)
+Accepted as designed: removing a member lifts the team policy from them (the role
+default is the floor); a team's copied tool rule applies to managers on the team.
+
+**Admin UI** (`ef33d68e`): Access policies page (policies, role defaults, tool sharing),
+Teams pages (admin list, lead team detail), policy and team columns on Users, owner,
+scope and expiry on API keys, team sharing for presets and prompt variables, user
+choice when pairing a phone. Checked by `yarn build` and ESLint only, not in a
+browser. New text is plain English (not `t()` keys), like the neighbouring pages. The
+prompt-variables page now needs sign-in only (leads use it); the server enforces edit
+rights. Not built: sidebar grouping of team workspaces, an "Owning team" field in
+workspace settings (done from the Teams page instead), a picker for sub-skills
+(`parent#child` is typed).
+
+**Validation** (server): full suite `npx jest server/__tests__` passes (95 suites, 2176
+tests, after the review fixes). One
 existing test changed: `server/__tests__/utils/agents/defaults.test.js` gained a
 pass-through mock of `agentToolAccessForUser`. Two existing tests are timing-sensitive and
 failed once each under load, passing alone (`mcpServers.test.js`,
