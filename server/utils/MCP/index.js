@@ -64,18 +64,28 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    */
   async activeMCPServers() {
     await this.bootMCPServers();
-    return Object.keys(this.mcps).flatMap((name) => `@@mcp_${name}`);
+    // A server whose client has closed stays in `mcps`; don't offer its tools (SMF-21).
+    return Object.keys(this.mcps)
+      .filter((name) => this.isServerAlive(name))
+      .flatMap((name) => `@@mcp_${name}`);
   }
 
   /**
    * Convert an MCP server name to an AnythingLLM Agent plugin
    * @param {string} name - The base name of the MCP server to convert - not the tool name. eg: `docker-mcp` not `docker-mcp:list-containers`
    * @param {Object} aibitat - The aibitat object to pass to the plugin
+   * @param {{toolFilter?: ((server: string, tool: string, allowedRoles: string[]|null) => boolean)|null}} [opts]
+   *   toolFilter - drops tools the calling user may not use (access policy tool rules and
+   *   `anythingllm.allowedRoles`)
    * @returns {Promise<{name: string, description: string, plugin: Function}[]|null>} Array of plugin configurations or null if not found
    */
-  async convertServerToolsToPlugins(name, aibitat = null) {
+  async convertServerToolsToPlugins(
+    name,
+    aibitat = null,
+    { toolFilter = null } = {}
+  ) {
     const mcp = this.mcps[name];
-    if (!mcp) return null;
+    if (!mcp || !this.isServerAlive(name)) return null;
 
     const identity = await resolveMCPIdentity(
       this.getForwardIdentityFields(name),
@@ -102,6 +112,16 @@ class MCPCompatibilityLayer extends MCPHypervisor {
       this.log(
         `MCP server ${name}: ${suppressedCount} tool(s) suppressed, ${tools.length} tool(s) enabled`
       );
+    }
+
+    if (toolFilter) {
+      const allowedRoles = this.getAllowedRoles(name);
+      const before = tools.length;
+      tools = tools.filter((tool) => toolFilter(name, tool.name, allowedRoles));
+      if (tools.length < before)
+        this.log(
+          `MCP server ${name}: ${before - tools.length} tool(s) not allowed for this user`
+        );
     }
 
     if (!tools.length) {

@@ -52,7 +52,8 @@ function parseAllowedModels(value) {
 }
 
 /**
- * Whether a provider and model pair is allowed by a policy. A null policy allows
+ * Whether a provider and model pair is allowed by a policy. A null policy, or a policy
+ * whose `allowed_models` is null (it restricts only tools or the router), allows
  * everything. `"*"` matches any model of that provider, including an unknown one
  * (`model` null means the provider picks its own default).
  * @param {object|null} policy
@@ -61,6 +62,8 @@ function parseAllowedModels(value) {
  */
 function isModelAllowed(policy, { provider = null, model = null } = {}) {
   if (!policy) return true;
+  if (policy.allowed_models === null || policy.allowed_models === undefined)
+    return true;
   if (!provider) return false;
   const allowed = parseAllowedModels(policy.allowed_models);
   return allowed.some(

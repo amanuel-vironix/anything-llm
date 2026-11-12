@@ -16,6 +16,13 @@ jest.mock("../../../utils/agentFlows", () => ({
     activeFlowPlugins: jest.fn().mockReturnValue([]),
   },
 }));
+// getDefinition filters tools by the user's access policy, which reads the database.
+// This suite has no database and tests prompts, not tool rules: allow every tool.
+jest.mock("../../../utils/accessPolicy/agentTools", () => ({
+  agentToolAccessForUser: jest.fn(async () => ({
+    filterFunctions: (functions) => [...functions],
+  })),
+}));
 jest.mock("../../../utils/MCP", () => {
   return jest.fn().mockImplementation(() => ({
     activeMCPServers: jest.fn().mockResolvedValue([]),

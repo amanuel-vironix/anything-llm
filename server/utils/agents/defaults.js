@@ -89,15 +89,19 @@ const WORKSPACE_AGENT = {
       role +=
         "\n\nWhen you need information from the user (URLs, file paths, preferences, choices, etc.), you MUST use the request-user-input tool. Do not ask questions in your text response - the user cannot reply to text. Only the tool can collect user input.";
 
+    // Only offer the tools this user's access policy, team policy or role default allows.
+    const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
+    const toolAccess = await agentToolAccessForUser(user);
+
     return {
       role,
-      functions: [
+      functions: toolAccess.filterFunctions([
         ...(await agentSkillsFromSystemSettings()),
         ...clarifyingQuestionsSkills,
         ...ImportedPlugin.activeImportedPlugins(),
         ...AgentFlows.activeFlowPlugins(),
         ...(await new MCPCompatibilityLayer().activeMCPServers()),
-      ],
+      ]),
     };
   },
 };

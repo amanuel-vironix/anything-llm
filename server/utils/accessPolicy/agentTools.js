@@ -235,8 +235,50 @@ async function mcpToolFilterForUser(user = null) {
     isMcpToolAllowed(rule, server, tool, { role }, allowedRoles);
 }
 
+/**
+ * Everything an agent handler needs to restrict tools for one user, resolved once:
+ * - `isAllowed(name)`: a function-list entry (`web-browsing`, `@@flow_x`, `@@mcp_x`…) is
+ *   allowed by the rule, and for an MCP server the user's role is in its
+ *   `anythingllm.allowedRoles`;
+ * - `filterFunctions(list)`;
+ * - `mcpToolFilter`: per-tool filter for `convertServerToolsToPlugins`, or null.
+ * With no user (single-user mode, legacy keys), nothing is restricted.
+ * @param {{id: number}|null} user
+ */
+async function agentToolAccessForUser(user = null) {
+  if (!user?.id)
+    return {
+      rule: null,
+      role: null,
+      isAllowed: () => true,
+      filterFunctions: (functions = []) => [...functions],
+      mcpToolFilter: null,
+    };
+  const { rule, role } = await resolveToolRuleForUser(user);
+  const MCPCompatibilityLayer = require("../MCP");
+  const serverRoleAllowed = (server) => {
+    const roles = new MCPCompatibilityLayer().getAllowedRoles(server);
+    return !roles || roles.includes(role);
+  };
+  const isAllowed = (name) => {
+    if (typeof name !== "string") return false;
+    if (name.startsWith("@@mcp_") && !serverRoleAllowed(name.slice(6)))
+      return false;
+    return isFunctionAllowed(rule, name);
+  };
+  return {
+    rule,
+    role,
+    isAllowed,
+    filterFunctions: (functions = []) => functions.filter(isAllowed),
+    mcpToolFilter: (server, tool, allowedRoles = null) =>
+      isMcpToolAllowed(rule, server, tool, { role }, allowedRoles),
+  };
+}
+
 module.exports = {
   ROLE_POLICY_SETTING,
+  agentToolAccessForUser,
   parseToolRule,
   validateToolRule,
   isFunctionAllowed,

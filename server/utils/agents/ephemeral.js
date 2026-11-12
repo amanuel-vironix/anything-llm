@@ -16,6 +16,7 @@ const {
   enforceAgentsAllowed,
   policyRouterWorkspace,
 } = require("../accessPolicy");
+const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
 const {
   USER_AGENT,
   WORKSPACE_AGENT,
@@ -46,6 +47,10 @@ class EphemeralAgentHandler extends AgentHandler {
   #prompt = null;
   /** @type {string[]} the functions to load into the agent (Aibitat plugins) */
   #funcsToLoad = [];
+  /** Tool access for the calling user (see utils/accessPolicy/agentTools); null until agents load. */
+  #toolAccess = null;
+  /** The calling user's access policy, resolved at init; null means no policy. */
+  #policy = null;
   /** @type {Array<{name: string, mime: string, contentString: string}>} attachments for multimodal support */
   #attachments = [];
   /** @type {Object[]} documents attached to this request, already parsed to text */
@@ -224,6 +229,8 @@ class EphemeralAgentHandler extends AgentHandler {
       this.#userId ? { id: Number(this.#userId) } : null
     );
     enforceAgentsAllowed(policy);
+    // Kept for the per-turn router re-resolution in createAIbitat.
+    this.#policy = policy;
 
     this.provider = this.#workspace?.agentProvider ?? null;
     this.model = this.#fetchModel();
@@ -249,7 +256,7 @@ class EphemeralAgentHandler extends AgentHandler {
     this.checkSetup();
   }
 
-  async #resolveRouterProvider(prompt = null, policy = null) {
+  async #resolveRouterProvider(prompt = null, policy = this.#policy) {
     const { AnythingLLMModelRouter } = require("../AiProviders/modelRouter");
     const routerWorkspace = policyRouterWorkspace(this.#workspace, policy);
 
@@ -292,6 +299,11 @@ class EphemeralAgentHandler extends AgentHandler {
 
   async #attachPlugins(args) {
     for (const name of this.#funcsToLoad) {
+      // Re-check each entry before attaching (defense in depth for the list filter).
+      if (this.#toolAccess && !this.#toolAccess.isAllowed(name)) {
+        this.log(`${name} is not allowed for this user. Skipping.`);
+        continue;
+      }
       // Load child plugin
       if (name.includes("#")) {
         const [parent, childPluginName] = name.split("#");
@@ -360,7 +372,8 @@ class EphemeralAgentHandler extends AgentHandler {
         const plugins =
           await new MCPCompatibilityLayer().convertServerToolsToPlugins(
             mcpPluginName,
-            this.aibitat
+            this.aibitat,
+            { toolFilter: this.#toolAccess?.mcpToolFilter ?? null }
           );
         if (!plugins) {
           this.log(
@@ -443,12 +456,16 @@ class EphemeralAgentHandler extends AgentHandler {
       )
     );
 
-    this.#funcsToLoad = [
+    // Same tool rule as the web agent (getDefinition filters with the same helper). The
+    // list itself differs on purpose: API agents have no one to answer clarifying
+    // questions, so those tools are left out here.
+    this.#toolAccess = await agentToolAccessForUser(user);
+    this.#funcsToLoad = this.#toolAccess.filterFunctions([
       ...(await agentSkillsFromSystemSettings()),
       ...ImportedPlugin.activeImportedPlugins(),
       ...AgentFlows.activeFlowPlugins(),
       ...(await new MCPCompatibilityLayer().activeMCPServers()),
-    ];
+    ]);
   }
 
   async init() {

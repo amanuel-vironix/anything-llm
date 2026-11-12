@@ -18,7 +18,7 @@ CREATE TABLE "access_policies" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "name" TEXT NOT NULL,
     "description" TEXT,
-    "allowed_models" TEXT NOT NULL DEFAULT '[]',
+    "allowed_models" TEXT,
     "default_provider" TEXT,
     "default_model" TEXT,
     "router_id" INTEGER,

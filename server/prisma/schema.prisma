@@ -508,7 +508,8 @@ model access_policies {
   name             String   @unique
   description      String?
   // JSON array of { provider: string, model: string } where model "*" matches any model of the provider.
-  allowed_models   String   @default("[]")
+  // Null means no model restriction (a policy used only for tools or a router); [] allows nothing.
+  allowed_models   String?
   default_provider String?
   default_model    String?
   router_id        Int? // model_routers.id; when set, chats for this account go through this router

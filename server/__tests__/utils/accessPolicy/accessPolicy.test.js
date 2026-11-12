@@ -38,6 +38,7 @@ describe("isModelAllowed", () => {
     ["unlisted provider is refused", policy(), "ollama", "llama3", false],
     ["empty list allows nothing", policy({ allowed_models: "[]" }), "openai", "gpt-4o-mini", false],
     ["malformed JSON allows nothing", policy({ allowed_models: "{oops" }), "anthropic", "x", false],
+    ["null list means no model restriction", policy({ allowed_models: null }), "ollama", "llama3", true],
     ["missing provider is refused", policy(), null, "gpt-4o-mini", false],
   ])("%s", (_name, p, provider, model, expected) => {
     expect(isModelAllowed(p, { provider, model })).toBe(expected);

@@ -36,10 +36,13 @@ const AccessPolicy = {
   },
 
   /**
-   * Validate `allowed_models`. Accepts an array or JSON string of `{provider, model}`.
-   * @returns {{value: string} | {error: string}}
+   * Validate `allowed_models`. Accepts an array or JSON string of `{provider, model}`, or
+   * null for "no model restriction".
+   * @returns {{value: string|null} | {error: string}}
    */
   validateAllowedModels(value) {
+    if (value === undefined || value === null || value === "")
+      return { value: null };
     let list = value;
     if (typeof value === "string") {
       try {
@@ -48,7 +51,7 @@ const AccessPolicy = {
         return { error: "Allowed models must be valid JSON." };
       }
     }
-    if (list === undefined || list === null) list = [];
+    if (list === null) return { value: null };
     if (!Array.isArray(list))
       return { error: "Allowed models must be a list of {provider, model}." };
     const cleaned = parseAllowedModels(list);

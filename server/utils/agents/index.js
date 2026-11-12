@@ -31,6 +31,7 @@ const {
   enforceAgentsAllowed,
   policyRouterWorkspace,
 } = require("../accessPolicy");
+const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
 
 /** An unused invocation UUID stops being valid after this long (decision 25). */
 const INVOCATION_TTL_MS = 10 * 60 * 1000;
@@ -38,6 +39,8 @@ const INVOCATION_TTL_MS = 10 * 60 * 1000;
 class AgentHandler {
   #invocationUUID;
   #caller = null;
+  /** Tool access for the invoking user (see utils/accessPolicy/agentTools). */
+  #toolAccess = null;
   #funcsToLoad = [];
   // Startup args (socket, etc.) retained so tools toggled on mid-session can be
   // loaded with the same options used at session start.
@@ -667,6 +670,12 @@ class AgentHandler {
    * @param {object} args - Startup args (socket, etc.) used to resolve call options.
    */
   async #attachPluginByName(name, args) {
+    // Re-check against the user's tool rule before attaching (defense in depth, and the
+    // only check for a tool turned on mid-chat).
+    if (this.#toolAccess && !this.#toolAccess.isAllowed(name)) {
+      this.log(`${name} is not allowed for this user. Skipping.`);
+      return;
+    }
     // Load child plugin
     if (name.includes("#")) {
       const [parent, childPluginName] = name.split("#");
@@ -733,7 +742,8 @@ class AgentHandler {
       const plugins =
         await new MCPCompatibilityLayer().convertServerToolsToPlugins(
           mcpPluginName,
-          this.aibitat
+          this.aibitat,
+          { toolFilter: this.#toolAccess?.mcpToolFilter ?? null }
         );
       if (!plugins) {
         this.log(
@@ -840,6 +850,10 @@ class AgentHandler {
       user,
       this.invocation.prompt
     );
+
+    // getDefinition already filtered the list by the user's tool rule; keep the same
+    // access to re-check each plugin as it is attached (including mid-chat toggles).
+    this.#toolAccess = await agentToolAccessForUser(user);
 
     this.aibitat.agent(USER_AGENT.name, userAgentDef);
     this.aibitat.agent(WORKSPACE_AGENT.name, workspaceAgentDef);
