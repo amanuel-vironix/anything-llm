@@ -30,6 +30,7 @@ const {
   enforceAllowedSelection,
   enforceAgentsAllowed,
   policyRouterWorkspace,
+  logPolicyRefusal,
 } = require("../accessPolicy");
 const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
 
@@ -513,7 +514,8 @@ class AgentHandler {
     const policy = await getPolicyForUser(
       this.invocation.user_id ? { id: Number(this.invocation.user_id) } : null
     );
-    enforceAgentsAllowed(policy);
+    const refusal = { userId: this.invocation.user_id ?? null };
+    enforceAgentsAllowed(policy, refusal);
 
     this.provider = this.invocation.workspace.agentProvider ?? null; // set provider to workspace agent provider if it exists
     this.model = this.#fetchModel();
@@ -525,10 +527,11 @@ class AgentHandler {
     if (this.provider === "anythingllm-router") {
       await this.#resolveRouterProvider(prompt, policy);
     } else if (policy) {
-      const selection = enforceAllowedSelection(policy, {
-        provider: this.provider,
-        model: this.model ?? null,
-      });
+      const selection = enforceAllowedSelection(
+        policy,
+        { provider: this.provider, model: this.model ?? null },
+        refusal
+      );
       this.provider = selection.provider;
       this.model = selection.model;
     }
@@ -563,7 +566,12 @@ class AgentHandler {
       routerWorkspace,
       null,
       null,
-      policy ? (route) => enforceAllowedSelection(policy, route) : null
+      policy
+        ? (route) =>
+            enforceAllowedSelection(policy, route, {
+              userId: this.invocation.user_id ?? null,
+            })
+        : null
     );
     const { ModelRouterService } = require("../router");
     const workspace = this.invocation.workspace;
@@ -611,8 +619,14 @@ class AgentHandler {
       if (
         !invocation.user_id ||
         Number(invocation.user_id) !== Number(this.#caller.userId)
-      )
+      ) {
+        logPolicyRefusal(
+          "agent_ws_rejected",
+          { reason: "other_user", invocationId: invocation.id },
+          this.#caller.userId ?? null
+        );
         throw new Error("You are not allowed to use this agent invocation");
+      }
     }
     if (
       invocation?.createdAt &&
@@ -674,6 +688,11 @@ class AgentHandler {
     // only check for a tool turned on mid-chat).
     if (this.#toolAccess && !this.#toolAccess.isAllowed(name)) {
       this.log(`${name} is not allowed for this user. Skipping.`);
+      logPolicyRefusal(
+        "tool_refused_by_policy",
+        { tool: name, check: "agent_tools" },
+        this.invocation?.user_id ?? null
+      );
       return;
     }
     // Load child plugin

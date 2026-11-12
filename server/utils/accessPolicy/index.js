@@ -107,10 +107,36 @@ function resolveAllowedSelection(
  * Same as resolveAllowedSelection, but throws an AccessPolicyError instead of returning
  * `{ error }`.
  */
-function enforceAllowedSelection(policy, selection) {
+function enforceAllowedSelection(policy, selection, { userId = null } = {}) {
   const result = resolveAllowedSelection(policy, selection);
-  if (result.error) throw new AccessPolicyError(result.error);
+  if (result.error) {
+    logPolicyRefusal(
+      "model_refused_by_policy",
+      {
+        provider: selection?.provider ?? null,
+        model: selection?.model ?? null,
+        check: "allowed_models",
+      },
+      userId
+    );
+    throw new AccessPolicyError(result.error);
+  }
   return result;
+}
+
+/**
+ * Record a refusal in the event log without blocking or failing the caller.
+ * @param {string} event
+ * @param {object} metadata
+ * @param {number|null} userId
+ */
+function logPolicyRefusal(event, metadata = {}, userId = null) {
+  Promise.resolve()
+    .then(() => {
+      const { EventLogs } = require("../../models/eventLogs");
+      return EventLogs.logEvent(event, metadata, userId ?? null);
+    })
+    .catch(() => {});
 }
 
 /**
@@ -135,12 +161,18 @@ function policyRouterWorkspace(workspace, policy = null) {
  * Throws when the policy turns agents off for this account.
  * @param {object|null} policy
  */
-function enforceAgentsAllowed(policy) {
-  if (policy && policy.allow_agents === false)
+function enforceAgentsAllowed(policy, { userId = null } = {}) {
+  if (policy && policy.allow_agents === false) {
+    logPolicyRefusal(
+      "tool_refused_by_policy",
+      { tool: "agent", check: "allow_agents" },
+      userId
+    );
     throw new AccessPolicyError(
       "Agents are disabled for your account. Ask an administrator if you need them.",
       "agents_disabled"
     );
+  }
 }
 
 /**
@@ -235,6 +267,7 @@ module.exports = {
   resolveAllowedSelection,
   enforceAllowedSelection,
   enforceAgentsAllowed,
+  logPolicyRefusal,
   policyRouterWorkspace,
   resolvePolicyChain,
   resolvePolicyForUser,

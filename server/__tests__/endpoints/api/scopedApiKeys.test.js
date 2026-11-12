@@ -92,6 +92,19 @@ const makeKey = (data = {}) =>
     data: { secret: `secret-${++seq}`, ...data },
   });
 
+/** Refusal events are written without blocking the request; wait for the row. */
+async function waitForEvent(event) {
+  for (let i = 0; i < 50; i++) {
+    const row = await prisma.event_logs.findFirst({
+      where: { event },
+      orderBy: { id: "desc" },
+    });
+    if (row) return row;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return null;
+}
+
 async function call(method, route, key, body) {
   const res = await fetch(`${baseUrl}${route}`, {
     method,
@@ -119,6 +132,8 @@ describe("validApiKey", () => {
     const res = await call("GET", "/v1/auth", key);
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/expired/);
+    const logged = await waitForEvent("api_key_expired_refused");
+    expect(JSON.parse(logged.metadata).keyId).toBe(key.id);
   });
 
   it("refuses a key whose owner is suspended", async () => {

@@ -15,6 +15,7 @@ const {
   enforceAllowedSelection,
   enforceAgentsAllowed,
   policyRouterWorkspace,
+  logPolicyRefusal,
 } = require("../accessPolicy");
 const { agentToolAccessForUser } = require("../accessPolicy/agentTools");
 const {
@@ -228,7 +229,8 @@ class EphemeralAgentHandler extends AgentHandler {
     const policy = await getPolicyForUser(
       this.#userId ? { id: Number(this.#userId) } : null
     );
-    enforceAgentsAllowed(policy);
+    const refusal = { userId: this.#userId ? Number(this.#userId) : null };
+    enforceAgentsAllowed(policy, refusal);
     // Kept for the per-turn router re-resolution in createAIbitat.
     this.#policy = policy;
 
@@ -242,10 +244,11 @@ class EphemeralAgentHandler extends AgentHandler {
     if (this.provider === "anythingllm-router") {
       await this.#resolveRouterProvider(null, policy);
     } else if (policy) {
-      const selection = enforceAllowedSelection(policy, {
-        provider: this.provider,
-        model: this.model ?? null,
-      });
+      const selection = enforceAllowedSelection(
+        policy,
+        { provider: this.provider, model: this.model ?? null },
+        refusal
+      );
       this.provider = selection.provider;
       this.model = selection.model;
     }
@@ -264,7 +267,12 @@ class EphemeralAgentHandler extends AgentHandler {
       routerWorkspace,
       null,
       null,
-      policy ? (route) => enforceAllowedSelection(policy, route) : null
+      policy
+        ? (route) =>
+            enforceAllowedSelection(policy, route, {
+              userId: this.#userId ? Number(this.#userId) : null,
+            })
+        : null
     );
     const { ModelRouterService } = require("../router");
     const workspace = this.#workspace;
@@ -302,6 +310,11 @@ class EphemeralAgentHandler extends AgentHandler {
       // Re-check each entry before attaching (defense in depth for the list filter).
       if (this.#toolAccess && !this.#toolAccess.isAllowed(name)) {
         this.log(`${name} is not allowed for this user. Skipping.`);
+        logPolicyRefusal(
+          "tool_refused_by_policy",
+          { tool: name, check: "agent_tools" },
+          this.#userId ? Number(this.#userId) : null
+        );
         continue;
       }
       // Load child plugin

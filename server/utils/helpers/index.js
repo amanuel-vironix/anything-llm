@@ -757,10 +757,14 @@ async function resolveProviderConnector({
     if (!policy)
       return { connector, routingMetadata: null, prefetchedContext: null };
 
-    const selection = enforceAllowedSelection(policy, {
-      provider: effectiveProvider || "openai",
-      model: connector.model ?? null,
-    });
+    const selection = enforceAllowedSelection(
+      policy,
+      {
+        provider: effectiveProvider || "openai",
+        model: connector.model ?? null,
+      },
+      { userId: user?.id ?? null }
+    );
     if (!selection.substituted)
       return { connector, routingMetadata: null, prefetchedContext: null };
     return {
@@ -785,7 +789,10 @@ async function resolveProviderConnector({
     temperatureOverride,
     // A routed model the policy doesn't allow is swapped for the policy default
     // before the delegate is built, so it is never called.
-    policy ? (route) => enforceAllowedSelection(policy, route) : null
+    policy
+      ? (route) =>
+          enforceAllowedSelection(policy, route, { userId: user?.id ?? null })
+      : null
   );
   const ctx = await ModelRouterService.gatherRoutingContext({
     workspace,

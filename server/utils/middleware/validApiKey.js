@@ -102,6 +102,12 @@ async function validApiKey(request, response, next) {
   }
 
   if (apiKey.expiresAt && new Date(apiKey.expiresAt).getTime() <= Date.now()) {
+    const { logPolicyRefusal } = require("../accessPolicy");
+    logPolicyRefusal(
+      "api_key_expired_refused",
+      { keyId: apiKey.id },
+      apiKey.user_id ?? null
+    );
     response.status(403).json({ error: "This API key has expired." });
     return;
   }

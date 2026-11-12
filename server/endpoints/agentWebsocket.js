@@ -12,6 +12,7 @@ const {
   authenticateSessionToken,
   tokenFromWebsocketRequest,
 } = require("../utils/middleware/validatedRequest");
+const { logPolicyRefusal } = require("../utils/accessPolicy");
 
 // Setup listener for incoming messages to relay to socket so it can be handled by agent plugin.
 function relayToSocket(message) {
@@ -38,6 +39,7 @@ function agentWebsocket(app) {
         tokenFromWebsocketRequest(request)
       );
       if (!auth.ok) {
+        logPolicyRefusal("agent_ws_rejected", { reason: "no_valid_session" });
         socket.send(
           JSON.stringify({
             type: "wssFailure",
