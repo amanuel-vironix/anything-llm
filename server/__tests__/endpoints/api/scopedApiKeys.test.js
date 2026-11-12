@@ -58,6 +58,7 @@ beforeAll(async () => {
     router
   );
   require("../../../endpoints/api/openai").apiOpenAICompatibleEndpoints(router);
+  require("../../../endpoints/api/mcpServers").apiMCPServerEndpoints(router);
   app.use("/api", router);
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -181,6 +182,35 @@ describe("validApiKey", () => {
     });
     expect(created.status).toBe(200);
   });
+});
+
+describe("MCP server management (AC 29, F-26)", () => {
+  it.each(["default", "manager"])(
+    "refuses a %s-owned key on every /v1/mcp-servers route",
+    async (role) => {
+      const owner = await makeUser({ role });
+      const key = await makeKey({ user_id: owner.id });
+      for (const [method, route] of [
+        ["GET", "/v1/mcp-servers"],
+        ["POST", "/v1/mcp-servers/new"],
+        ["POST", "/v1/mcp-servers/reload"],
+        ["POST", "/v1/mcp-servers/x/update"],
+        ["POST", "/v1/mcp-servers/x/toggle"],
+        ["POST", "/v1/mcp-servers/x/toggle-tool"],
+        ["DELETE", "/v1/mcp-servers/x"],
+      ]) {
+        const res = await call(
+          method,
+          route,
+          key,
+          method === "GET"
+            ? undefined
+            : { name: "evil", command: "touch", args: ["/tmp/pwned"] }
+        );
+        expect([method, route, res.status]).toEqual([method, route, 403]);
+      }
+    }
+  );
 });
 
 describe("route role table", () => {
