@@ -3,6 +3,8 @@ const { reqBody, multiUserMode } = require("../../utils/http");
 const { Telemetry } = require("../../models/telemetry");
 const { streamChatWithForEmbed } = require("../../utils/chats/embed");
 const { EmbedChats } = require("../../models/embedChats");
+const { audit } = require("../../utils/audit");
+const { hashValue } = require("../../utils/audit/sanitize");
 const {
   validEmbedConfig,
   canRespond,
@@ -38,6 +40,24 @@ function embeddedEndpoints(app) {
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Connection", "keep-alive");
         response.flushHeaders();
+
+        // The visitor's session id and message are never stored in the audit
+        // row: only a hash of the session and the message length.
+        await audit.record(
+          {
+            action: "embed.chat",
+            targetType: "embed",
+            targetId: embed.id,
+            workspaceId: embed.workspace_id,
+            metadata: {
+              embedUuid: embed.uuid,
+              sessionHash: hashValue(sessionId),
+              origin: request.headers?.origin,
+              messageLength: typeof message === "string" ? message.length : 0,
+            },
+          },
+          { response }
+        );
 
         await streamChatWithForEmbed(response, embed, message, sessionId, {
           promptOverride: prompt,
@@ -99,6 +119,19 @@ function embeddedEndpoints(app) {
         const embed = response.locals.embedConfig;
 
         await EmbedChats.markHistoryInvalid(embed.id, sessionId);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "embed.chats_deleted",
+              targetType: "embed",
+              targetId: embed.id,
+              workspaceId: embed.workspace_id,
+              metadata: { embedUuid: embed.uuid },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).end();
       } catch (e) {
         console.error(e.message, e);

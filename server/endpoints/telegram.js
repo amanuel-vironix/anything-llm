@@ -6,7 +6,7 @@ const { TelegramBotService } = require("../utils/telegramBot");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
 const { isSingleUserMode } = require("../utils/middleware/multiUserProtected");
 const { reqBody } = require("../utils/http");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const { Workspace } = require("../models/workspace");
 const { WorkspaceThread } = require("../models/workspaceThread");
 const { encryptToken } = require("../utils/telegramBot/utils");
@@ -143,9 +143,14 @@ function telegramEndpoints(app) {
         const service = new TelegramBotService();
         await service.start({ ...storedConfig, bot_token: String(bot_token) });
 
-        await EventLogs.logEvent("telegram_bot_connected", {
-          bot_username: verification.username,
-        });
+        await audit.record(
+          {
+            action: "telegram.bot_connected",
+            targetType: "telegram_bot",
+            metadata: { botUsername: verification.username },
+          },
+          { response }
+        );
         await Telemetry.sendTelemetry("telegram_bot_connected");
         return response.status(200).json({
           success: true,
@@ -166,7 +171,10 @@ function telegramEndpoints(app) {
         const service = new TelegramBotService();
         await service.stop();
         await ExternalCommunicationConnector.delete("telegram");
-        await EventLogs.logEvent("telegram_bot_disconnected");
+        await audit.record(
+          { action: "telegram.bot_disconnected", targetType: "telegram_bot" },
+          { response }
+        );
         return response.status(200).json({ success: true });
       } catch (e) {
         console.error(e.message, e);
@@ -237,7 +245,15 @@ function telegramEndpoints(app) {
 
         const service = new TelegramBotService();
         await service.approvePendingUser(chatId);
-        await EventLogs.logEvent("telegram_user_approved", { chatId });
+        await audit.record(
+          {
+            action: "telegram.user_approved",
+            targetType: "telegram_chat",
+            targetId: chatId,
+            metadata: { telegramUserId: chatId },
+          },
+          { response }
+        );
         return response.status(200).json({ success: true });
       } catch (e) {
         console.error(e.message, e);
@@ -259,7 +275,15 @@ function telegramEndpoints(app) {
 
         const service = new TelegramBotService();
         await service.denyPendingUser(chatId);
-        await EventLogs.logEvent("telegram_user_denied", { chatId });
+        await audit.record(
+          {
+            action: "telegram.user_denied",
+            targetType: "telegram_chat",
+            targetId: chatId,
+            metadata: { telegramUserId: chatId },
+          },
+          { response }
+        );
         return response.status(200).json({ success: true });
       } catch (e) {
         console.error(e.message, e);
@@ -281,7 +305,15 @@ function telegramEndpoints(app) {
 
         const service = new TelegramBotService();
         await service.revokeExistingUser(chatId);
-        await EventLogs.logEvent("telegram_user_revoked", { chatId });
+        await audit.record(
+          {
+            action: "telegram.user_revoked",
+            targetType: "telegram_chat",
+            targetId: chatId,
+            metadata: { telegramUserId: chatId },
+          },
+          { response }
+        );
         return response.status(200).json({ success: true });
       } catch (e) {
         console.error(e.message, e);
@@ -323,6 +355,19 @@ function telegramEndpoints(app) {
         const service = new TelegramBotService();
         if (service.isRunning) service.updateConfig(updates);
 
+        for (const [key, value] of Object.entries(updates)) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "settings.changed",
+                targetType: "telegram_config",
+                metadata: { key: `telegram.${key}`, to: value },
+              },
+              response
+            ))
+          )
+            return;
+        }
         return response.status(200).json({ success: true });
       } catch (e) {
         console.error(e.message, e);

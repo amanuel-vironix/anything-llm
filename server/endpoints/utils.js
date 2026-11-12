@@ -9,6 +9,7 @@ const {
   sendChatHistoryFile,
 } = require("../utils/chats/exportChatToFile");
 const { multiUserMode, reqBody, userFromSession } = require("../utils/http");
+const { audit } = require("../utils/audit");
 
 function utilEndpoints(app) {
   if (!app) return;
@@ -77,6 +78,25 @@ function utilEndpoints(app) {
           workspaceName: workspace.name,
           threadName: thread?.name || null,
         };
+
+        // Recorded before the file is sent: a failed write blocks the export.
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.exported",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: {
+                format: type,
+                count: chats.length,
+                filter: { workspaceSlug: workspace.slug, threadSlug },
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         return sendChatHistoryFile(response, chats, meta, type);
       } catch (e) {

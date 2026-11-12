@@ -6,7 +6,7 @@ const {
   communityHubDownloadsEnabled,
   communityHubItem,
 } = require("../utils/middleware/communityHubDownloadsEnabled");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const { Telemetry } = require("../models/telemetry");
 const {
   flexUserRoleValid,
@@ -38,6 +38,24 @@ function communityHubEndpoints(app) {
         const data = reqBody(request);
         const result = await SystemSettings.updateSettings(data);
         if (result.error) throw new Error(result.error);
+        // The connection key itself is never recorded, only that it was saved.
+        if (data?.hub_api_key !== undefined) {
+          await audit.record(
+            { action: "community_hub.connected", targetType: "community_hub" },
+            { response }
+          );
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "settings.changed",
+                targetType: "system_settings",
+                metadata: { key: "hub_api_key", source: "community_hub" },
+              },
+              response
+            ))
+          )
+            return;
+        }
         response.status(200).json({ success: true, error: null });
       } catch (error) {
         console.error(error);
@@ -105,14 +123,21 @@ function communityHubEndpoints(app) {
           itemType: response.locals.bundleItem.itemType,
           visibility: response.locals.bundleItem.visibility,
         });
-        await EventLogs.logEvent(
-          "community_hub_import",
-          {
-            itemId: response.locals.bundleItem.id,
-            itemType: response.locals.bundleItem.itemType,
-          },
-          response.locals?.user?.id
-        );
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "skill.installed",
+              targetType: "community_hub_item",
+              targetId: response.locals.bundleItem.id,
+              metadata: {
+                kind: response.locals.bundleItem.itemType,
+                hubId: response.locals.bundleItem.id,
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         response.status(200).json({ success: true, error: null });
       } catch (error) {
@@ -147,14 +172,21 @@ function communityHubEndpoints(app) {
           itemType: response.locals.bundleItem.itemType,
           visibility: response.locals.bundleItem.visibility,
         });
-        await EventLogs.logEvent(
-          "community_hub_import",
-          {
-            itemId: response.locals.bundleItem.id,
-            itemType: response.locals.bundleItem.itemType,
-          },
-          response.locals?.user?.id
-        );
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "skill.installed",
+              targetType: "community_hub_item",
+              targetId: response.locals.bundleItem.id,
+              metadata: {
+                kind: response.locals.bundleItem.itemType,
+                hubId: response.locals.bundleItem.id,
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         response.status(200).json({ success: true, error: null });
       } catch (error) {
@@ -200,10 +232,17 @@ function communityHubEndpoints(app) {
         );
         if (!success) throw new Error(error);
 
-        await EventLogs.logEvent(
-          "community_hub_publish",
-          { itemType: communityHubItemType },
-          response.locals?.user?.id
+        await audit.record(
+          {
+            action: "community_hub.published",
+            targetType: "community_hub_item",
+            targetId: itemId,
+            metadata: {
+              itemType: communityHubItemType,
+              visibility: data?.visibility,
+            },
+          },
+          { response }
         );
         response
           .status(200)
