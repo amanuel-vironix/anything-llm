@@ -14,7 +14,13 @@ import { Trash } from "@phosphor-icons/react";
  * @param {Function} onRefresh - A function to call when the variable is refreshed
  * @returns {JSX.Element} A JSX element for displaying the variable
  */
-export default function VariableRow({ variable, onRefresh }) {
+export default function VariableRow({
+  variable,
+  onRefresh,
+  showVisibility = false,
+  teamName = null,
+  canManage = true,
+}) {
   const rowRef = useRef(null);
   const { isOpen, openModal, closeModal } = useModal();
 
@@ -92,8 +98,19 @@ export default function VariableRow({ variable, onRefresh }) {
             {titleCase(variable?.type ?? "static")}
           </span>
         </td>
+        {showVisibility && (
+          <td className="px-4 py-2 whitespace-nowrap">
+            {variable.teamId ? (
+              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs leading-5 font-semibold text-sky-300 light:text-sky-700">
+                Shared: {teamName || "Team"}
+              </span>
+            ) : (
+              "Everyone"
+            )}
+          </td>
+        )}
         <td className="px-4 py-2 flex items-center justify-end gap-x-4">
-          {variable.type === "static" && (
+          {variable.type === "static" && canManage && (
             <>
               <button
                 onClick={openModal}

@@ -5,6 +5,10 @@ import paths from "@/utils/paths";
 import { userFromStorage } from "@/utils/request";
 import System from "@/models/system";
 import { useTranslation } from "react-i18next";
+import ApiKeyScopeFields, {
+  scopeFromKey,
+  scopeToPayload,
+} from "../ApiKeyScopeFields";
 import {
   ModalHeader,
   ModalBody,
@@ -14,21 +18,30 @@ import {
   ModalInput,
 } from "@/components/lib/Modal";
 
-export default function NewApiKeyModal({ closeModal, onSuccess }) {
+export default function NewApiKeyModal({
+  closeModal,
+  onSuccess,
+  users = [],
+  workspaces = [],
+}) {
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState(null);
   const [name, setName] = useState("");
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const currentUser = userFromStorage();
+  const multiUser = !!currentUser;
+  // The owner defaults to the admin creating the key.
+  const [scope, setScope] = useState(scopeFromKey(null, currentUser?.id));
 
   const handleCreate = async (e) => {
     setError(null);
     e.preventDefault();
-    const user = userFromStorage();
-    const Model = !!user ? Admin : System;
+    const Model = multiUser ? Admin : System;
 
     const { apiKey: newApiKey, error } = await Model.generateApiKey({
       name,
+      ...scopeToPayload(scope, { multiUser }),
     });
     if (!!newApiKey) {
       setApiKey(newApiKey);
@@ -70,6 +83,15 @@ export default function NewApiKeyModal({ closeModal, onSuccess }) {
             onChange={(e) => setName(e.target.value)}
             placeholder={t("api.modal.name.placeholder")}
             hint={t("api.modal.name.helper")}
+          />
+        )}
+        {!apiKey && (
+          <ApiKeyScopeFields
+            scope={scope}
+            onChange={setScope}
+            multiUser={multiUser}
+            users={users}
+            workspaces={workspaces}
           />
         )}
         {apiKey && (

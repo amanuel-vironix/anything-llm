@@ -11,6 +11,7 @@ import Modal, {
 } from "@/components/lib/Modal";
 import { CMD_REGEX, isReservedCommand } from "./constants";
 import showToast from "@/utils/toast";
+import Toggle from "@/components/lib/Toggle";
 
 export default function EditPresetModal({
   isOpen,
@@ -18,13 +19,19 @@ export default function EditPresetModal({
   onSave,
   onDelete,
   preset,
+  teamName = null,
 }) {
   const [command, setCommand] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [shareWithTeam, setShareWithTeam] = useState(false);
+  // Only the owner can share or unshare; leads and admins can still edit a shared one.
+  const isOwner = preset?.isOwner !== false;
+  const canToggleShare = isOwner && !!teamName;
 
   useEffect(() => {
     if (preset && isOpen) {
       setCommand(preset.command?.slice(1) || "");
+      setShareWithTeam(!!preset.shared);
     }
   }, [preset, isOpen]);
 
@@ -44,6 +51,7 @@ export default function EditPresetModal({
       command: `/${sanitizedCommand}`,
       prompt: form.get("prompt"),
       description: form.get("description"),
+      ...(canToggleShare ? { shareWithTeam } : {}),
     });
   };
 
@@ -92,6 +100,22 @@ export default function EditPresetModal({
             placeholder="Responds with a poem about LLMs."
             required={true}
           />
+          {canToggleShare && (
+            <Toggle
+              size="md"
+              variant="horizontal"
+              label="Share with my team"
+              description={`Everyone on ${teamName} can use this command.`}
+              enabled={shareWithTeam}
+              onChange={setShareWithTeam}
+            />
+          )}
+          {!isOwner && preset.shared && (
+            <p className="text-xs text-zinc-400 light:text-slate-500">
+              This preset is shared with your team by another user. Changes
+              apply for everyone on the team.
+            </p>
+          )}
         </ModalBody>
         <ModalFooter>
           <ModalDangerButton

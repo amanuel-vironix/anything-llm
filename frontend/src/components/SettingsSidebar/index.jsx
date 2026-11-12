@@ -24,6 +24,7 @@ import System from "@/models/system";
 import Option from "./MenuOption";
 import { CanViewChatHistoryProvider } from "../CanViewChatHistory";
 import useAppVersion from "@/hooks/useAppVersion";
+import useMyTeam from "@/hooks/useMyTeam";
 
 export default function SettingsSidebar() {
   const { t } = useTranslation();
@@ -212,7 +213,15 @@ function SupportEmail() {
   );
 }
 
-const SidebarOptions = ({ user = null, t }) => (
+const SidebarOptions = ({ user = null, t }) => {
+  const { role: teamRole } = useMyTeam();
+  // Team leads have the default role but may manage their own team.
+  const teamsRoles =
+    teamRole === "lead" && user?.role ? ["admin", user.role] : ["admin"];
+  return <SidebarOptionList user={user} t={t} teamsRoles={teamsRoles} />;
+};
+
+const SidebarOptionList = ({ user = null, t, teamsRoles = ["admin"] }) => (
   <CanViewChatHistoryProvider>
     {({ viewable: canViewChatHistory }) => (
       <>
@@ -269,6 +278,12 @@ const SidebarOptions = ({ user = null, t }) => (
               flex: true,
               roles: ["admin"],
             },
+            {
+              // Policies apply to users, so multi-user mode only (no flex).
+              btnText: "Access Policies",
+              href: paths.settings.accessPolicies(),
+              roles: ["admin"],
+            },
           ]}
         />
         <Option
@@ -285,6 +300,11 @@ const SidebarOptions = ({ user = null, t }) => (
               btnText: t("settings.workspaces"),
               href: paths.settings.workspaces(),
               roles: ["admin", "manager"],
+            },
+            {
+              btnText: "Teams",
+              href: paths.settings.teams(),
+              roles: teamsRoles,
             },
             {
               hidden: !canViewChatHistory,
@@ -423,7 +443,7 @@ const SidebarOptions = ({ user = null, t }) => (
               btnText: t("settings.system-prompt-variables"),
               href: paths.settings.systemPromptVariables(),
               flex: true,
-              roles: ["admin"],
+              roles: teamsRoles,
             },
             {
               btnText: t("settings.browser-extension"),

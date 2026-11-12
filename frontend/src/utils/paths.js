@@ -165,6 +165,15 @@ export default {
     modelRouterRules: (id) => {
       return `/settings/model-routers/${id}`;
     },
+    accessPolicies: () => {
+      return "/settings/access-policies";
+    },
+    teams: () => {
+      return "/settings/teams";
+    },
+    team: (id) => {
+      return `/settings/teams/${id}`;
+    },
     systemPromptVariables: () => "/settings/system-prompt-variables",
     logs: () => {
       return "/settings/event-logs";

@@ -9,8 +9,26 @@ import PreLoader from "@/components/Preloader";
 import Logo from "@/media/logo/anything-llm-infinity.png";
 import paths from "@/utils/paths";
 import GetOnGooglePlay from "./gplay-badge.svg";
+import Admin from "@/models/admin";
+import useUser from "@/hooks/useUser";
 
 export default function MobileConnectModal({ isOpen, onClose }) {
+  const { user } = useUser();
+  const isMultiUserAdmin = user?.role === "admin";
+  const [users, setUsers] = useState([]);
+  const [pairForUserId, setPairForUserId] = useState("");
+
+  useEffect(() => {
+    if (!isOpen || !isMultiUserAdmin) return;
+    Admin.users().then((found) =>
+      setUsers((found || []).filter((u) => !u.suspended))
+    );
+  }, [isOpen, isMultiUserAdmin]);
+
+  useEffect(() => {
+    if (!isOpen) setPairForUserId("");
+  }, [isOpen]);
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} variant="bare">
       <div
@@ -59,8 +77,39 @@ export default function MobileConnectModal({ isOpen, onClose }) {
 
           {/* right column */}
           <div className="flex flex-col items-center justify-center shrink-0 w-1/2 gap-y-[16px]">
+            {isMultiUserAdmin && (
+              <div className="flex flex-col gap-y-1 w-[300px]">
+                <label
+                  htmlFor="pair-for-user"
+                  className="text-[#FFF] text-sm font-semibold"
+                >
+                  Pair for user
+                </label>
+                <select
+                  id="pair-for-user"
+                  value={pairForUserId}
+                  onChange={(e) => setPairForUserId(e.target.value)}
+                  className="bg-zinc-800 text-white text-sm rounded-[8px] outline-none block w-full h-8 px-3.5"
+                >
+                  <option value="">Myself ({user.username})</option>
+                  {users
+                    .filter((u) => u.id !== user.id)
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.username} ({u.role})
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[#FFF]/70 text-xs">
+                  The device signs in as the chosen user once you approve it.
+                </p>
+              </div>
+            )}
             <div className="bg-white/10 rounded-lg p-[40px] w-[300px] h-[300px] flex flex-col gap-y-[16px] items-center justify-center">
-              <ConnectionQrCode isOpen={isOpen} />
+              <ConnectionQrCode
+                isOpen={isOpen}
+                userId={pairForUserId ? Number(pairForUserId) : null}
+              />
             </div>
             <p className="text-[#FFF] text-sm w-[300px] text-center">
               Scan the QR code with the AnythingLLM Mobile app to enable live
@@ -109,7 +158,7 @@ function processConnectionUrl(url) {
   return connectionUrl.toString();
 }
 
-const ConnectionQrCode = ({ isOpen }) => {
+const ConnectionQrCode = ({ isOpen, userId = null }) => {
   const [connectionInfo, setConnectionInfo] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -117,8 +166,10 @@ const ConnectionQrCode = ({ isOpen }) => {
   useEffect(() => {
     if (!isOpen) return;
     setIsLoading(true);
-    MobileConnection.getConnectionInfo()
+    setError(null);
+    MobileConnection.getConnectionInfo(userId)
       .then((res) => {
+        if (!res) throw new Error("Could not get the connection info.");
         if (res.error) throw new Error(res.error);
         const url = processConnectionUrl(res.connectionUrl);
         setConnectionInfo(url);
@@ -129,7 +180,7 @@ const ConnectionQrCode = ({ isOpen }) => {
       .finally(() => {
         setIsLoading(false);
       });
-  }, [isOpen]);
+  }, [isOpen, userId]);
 
   if (isLoading) return <PreLoader size="[100px]" />;
   if (error)
