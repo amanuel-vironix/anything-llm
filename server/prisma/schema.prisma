@@ -16,12 +16,20 @@ datasource db {
 }
 
 model api_keys {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   name          String?
-  secret        String?  @unique
+  secret        String?   @unique
   createdBy     Int?
-  createdAt     DateTime @default(now())
-  lastUpdatedAt DateTime @default(now())
+  // Owner of the key. Null means a legacy, unscoped key (refused in multi-user mode).
+  user_id       Int?
+  // JSON array of workspace ids the key may reach. Null means every workspace the owner can reach.
+  workspace_ids String?
+  expiresAt     DateTime?
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  lastUpdatedAt DateTime  @default(now())
+
+  @@index([user_id])
 }
 
 model workspace_documents {
@@ -71,6 +79,7 @@ model users {
   dailyMessageLimit            Int?
   bio                          String?                       @default("")
   web_push_subscription_config String?
+  policy_id                    Int? // access_policies.id; no relation to avoid a table rebuild (SQLite)
   workspace_chats              workspace_chats[]
   workspace_users              workspace_users[]
   embed_configs                embed_configs[]
@@ -87,6 +96,7 @@ model users {
   desktop_mobile_devices       desktop_mobile_devices[]
   workspace_parsed_files       workspace_parsed_files[]
   memories                     memories[]
+  team_membership              team_members?
 }
 
 model recovery_codes {
@@ -140,6 +150,7 @@ model workspaces {
   queryRefusalResponse         String?
   vectorSearchMode             String?                        @default("default")
   router_id                    Int? // No relation to prevent whole table migration (SQLite limitation)
+  team_id                      Int? // Owning team (teams.id); null means no team. No relation (SQLite limitation)
   workspace_users              workspace_users[]
   documents                    workspace_documents[]
   workspace_suggested_messages workspace_suggested_messages[]
@@ -180,16 +191,16 @@ model workspace_suggested_messages {
 }
 
 model workspace_chats {
-  id             Int      @id @default(autoincrement())
-  workspaceId    Int
-  prompt         String
-  response       String
-  include        Boolean  @default(true)
-  user_id        Int?
-  thread_id      Int? // No relation to prevent whole table migration
-  api_session_id String? // String identifier for only the dev API to partition chats in any mode.
-  createdAt      DateTime @default(now())
-  lastUpdatedAt  DateTime @default(now())
+  id              Int      @id @default(autoincrement())
+  workspaceId     Int
+  prompt          String
+  response        String
+  include         Boolean  @default(true)
+  user_id         Int?
+  thread_id       Int? // No relation to prevent whole table migration
+  api_session_id  String? // String identifier for only the dev API to partition chats in any mode.
+  createdAt       DateTime @default(now())
+  lastUpdatedAt   DateTime @default(now())
   feedbackScore   Boolean?
   memoryProcessed Boolean? @map("memory_processed")
   users           users?   @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -284,11 +295,13 @@ model slash_command_presets {
   description   String
   uid           Int      @default(0) // 0 is null user
   userId        Int?
+  team_id       Int      @default(0) // 0 is not shared; otherwise teams.id the preset is shared with
   createdAt     DateTime @default(now())
   lastUpdatedAt DateTime @default(now())
   user          users?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([uid, command])
+  @@unique([uid, team_id, command])
+  @@index([team_id])
 }
 
 model document_sync_queues {
@@ -341,6 +354,7 @@ model system_prompt_variables {
   description String?
   type        String   @default("system") // system, user, dynamic
   userId      Int?
+  team_id     Int? // teams.id the variable is shared with; null means not shared
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   user        users?   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -459,30 +473,75 @@ model model_routers {
 }
 
 model model_router_rules {
-  id               Int           @id @default(autoincrement())
-  router_id        Int
-  enabled          Boolean       @default(true)
-  priority         Int
-  type             String        @default("calculated")
-  title            String
-  description      String?
+  id              Int           @id @default(autoincrement())
+  router_id       Int
+  enabled         Boolean       @default(true)
+  priority        Int
+  type            String        @default("calculated")
+  title           String
+  description     String?
   // For `calculated` rules: the boolean operator joining `conditions` — "AND"
   // (all must match) or "OR" (any must match). Null for `llm` rules.
-  condition_logic  String?
+  condition_logic String?
   // For `calculated` rules: JSON-stringified array of condition objects, each
   // shaped as { property: string, comparator: string, value: string } where
   // `property` ∈ VALID_PROPERTIES and `comparator` ∈ VALID_COMPARATORS (see
   // server/models/modelRouterRule.js). `value` is always stored as a string;
   // numeric comparators parse it at evaluation time. Null for `llm` rules.
-  conditions       String?
-  route_provider   String
-  route_model      String
-  created_by       Int?
-  createdAt        DateTime      @default(now())
-  lastUpdatedAt    DateTime      @default(now())
-  router           model_routers @relation(fields: [router_id], references: [id], onDelete: Cascade)
+  conditions      String?
+  route_provider  String
+  route_model     String
+  created_by      Int?
+  createdAt       DateTime      @default(now())
+  lastUpdatedAt   DateTime      @default(now())
+  router          model_routers @relation(fields: [router_id], references: [id], onDelete: Cascade)
 
   @@unique([router_id, title])
   @@index([router_id])
   @@index([router_id, enabled, priority])
+}
+
+// Per-account access policy: which models, router and agent tools an account may use.
+// Assigned to a user (users.policy_id) or a team (teams.policy_id). No policy means today's behavior.
+model access_policies {
+  id               Int      @id @default(autoincrement())
+  name             String   @unique
+  description      String?
+  // JSON array of { provider: string, model: string } where model "*" matches any model of the provider.
+  allowed_models   String   @default("[]")
+  default_provider String?
+  default_model    String?
+  router_id        Int? // model_routers.id; when set, chats for this account go through this router
+  allow_agents     Boolean  @default(true)
+  // JSON tool rule { allow: string[] | null, deny: string[] }; null means use the role default.
+  agent_tools      String?
+  created_by       Int?
+  createdAt        DateTime @default(now())
+  lastUpdatedAt    DateTime @default(now())
+}
+
+model teams {
+  id            Int            @id @default(autoincrement())
+  name          String         @unique
+  description   String?
+  policy_id     Int? // access_policies.id applied to every member without a policy of their own
+  idp_group     String?        @unique // Google Group email for a later group sync; stored only
+  created_by    Int?
+  createdAt     DateTime       @default(now())
+  lastUpdatedAt DateTime       @default(now())
+  members       team_members[]
+}
+
+model team_members {
+  id        Int      @id @default(autoincrement())
+  team_id   Int
+  user_id   Int      @unique // v1: one team per user
+  role      String   @default("member") // member | lead
+  added_by  Int?
+  createdAt DateTime @default(now())
+  team      teams    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  user      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([team_id, user_id])
+  @@index([team_id, role])
 }
