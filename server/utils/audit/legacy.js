@@ -20,6 +20,18 @@ function hostOf(link) {
   }
 }
 
+const USER_FIELDS_WITH_VALUES = [
+  "role",
+  "suspended",
+  "dailyMessageLimit",
+  "username",
+];
+
+function domainOf(email) {
+  if (typeof email !== "string" || !email.includes("@")) return null;
+  return email.split("@").pop().toLowerCase();
+}
+
 function changesFrom(changes = {}) {
   const out = {};
   for (const [field, text] of Object.entries(changes || {})) {
@@ -75,9 +87,47 @@ const LEGACY_EVENT_MAP = {
     targetType: uid ? "user" : undefined,
     targetId: uid,
     metadata: {
-      method: m.multiUserMode === false ? "single_user_password" : "password",
+      method:
+        m.method === "oidc"
+          ? "oidc"
+          : m.multiUserMode === false
+            ? "single_user_password"
+            : "password",
       username: m.username,
     },
+  }),
+  // Google sign-in branch (endpoints/auth/oidc.js, system.js). The email and
+  // the provider's error detail never go in a row: only the email's domain.
+  failed_login_oidc: (m) => ({
+    action: "auth.login_failed",
+    outcome: "failed",
+    reason: m.reason || "oidc_failed",
+    metadata: { method: "oidc", emailDomain: domainOf(m.email) },
+  }),
+  failed_login_password_disabled: (m, uid) => ({
+    action: "auth.login_failed",
+    outcome: "denied",
+    reason: "password_login_disabled",
+    targetType: "user",
+    targetId: uid,
+    metadata: { method: "password", username: m.username },
+  }),
+  user_created_oidc: (m, uid) => ({
+    action: "auth.oidc_user_provisioned",
+    actor: asActor(uid),
+    targetType: "user",
+    targetId: uid,
+    metadata: { provider: "oidc", role: m.role },
+  }),
+  oidc_settings_updated: () => ({
+    action: "settings.changed",
+    metadata: { key: "oidc", source: "admin" },
+  }),
+  password_reset: (_m, uid) => ({
+    action: "auth.password_reset",
+    actor: asActor(uid),
+    targetType: "user",
+    targetId: uid,
   }),
   multi_user_mode_enabled: (m, uid) => ({
     action: "multi_user.enabled",
@@ -110,10 +160,16 @@ const LEGACY_EVENT_MAP = {
       {
         ...base,
         action: "user.updated",
+        // Values only for access-relevant fields; a bio or other free
+        // text is named, never stored.
         metadata: {
           username: m.username,
           changedFields: Object.keys(changes),
-          changes,
+          changes: Object.fromEntries(
+            Object.entries(changes).filter(([field]) =>
+              USER_FIELDS_WITH_VALUES.includes(field)
+            )
+          ),
         },
       },
     ];
@@ -153,8 +209,113 @@ const LEGACY_EVENT_MAP = {
     targetId: uid,
     metadata: { username: m.username },
   }),
-  api_key_created: () => ({ action: "api_key.created", targetType: "api_key" }),
+  // The access-policy branch adds an owner, workspace scope and expiry.
+  api_key_created: (m) => ({
+    action: "api_key.created",
+    targetType: "api_key",
+    metadata: {
+      ownerId: m.userId,
+      workspaceIds: m.workspaceIds,
+      expiresAt: m.expiresAt,
+    },
+  }),
+  api_key_updated: (m) => ({
+    action: "api_key.updated",
+    targetType: "api_key",
+    targetId: m.apiKeyId,
+    metadata: {
+      keyId: m.apiKeyId,
+      ownerId: m.userId,
+      workspaceIds: m.workspaceIds,
+      expiresAt: m.expiresAt,
+    },
+  }),
   api_key_deleted: () => ({ action: "api_key.deleted", targetType: "api_key" }),
+  legacy_api_key_refused: (m) => ({
+    action: "access.denied",
+    outcome: "denied",
+    reason: "key_scope",
+    actor: { type: "api_key", id: m.apiKeyId, onBehalfOf: null },
+    metadata: { route: m.path, check: "key_owner" },
+  }),
+
+  // Access-policy branch: policies, teams and role defaults. Their metadata
+  // passes through the catalogue's allow-list.
+  ...Object.fromEntries(
+    [
+      ["policy_created", "policy.created", "policy"],
+      ["policy_updated", "policy.updated", "policy"],
+      ["policy_deleted", "policy.deleted", "policy"],
+      ["policy_assigned", "policy.assigned", "policy"],
+      ["role_default_updated", "role_default.updated", "setting"],
+      ["team_created", "team.created", "team"],
+      ["team_updated", "team.updated", "team"],
+      ["team_deleted", "team.deleted", "team"],
+      ["team_member_added", "team.member_added", "team"],
+      ["team_member_removed", "team.member_removed", "team"],
+      ["team_lead_changed", "team.lead_changed", "team"],
+    ].map(([event, action, targetType]) => [
+      event,
+      (m) => ({
+        action,
+        targetType,
+        targetId: m.policyId ?? m.teamId ?? m.id,
+        teamId: targetType === "team" ? m.teamId ?? m.id : undefined,
+        metadata: m,
+      }),
+    ])
+  ),
+  team_workspace_created: (m) => ({
+    action: "workspace.created",
+    teamId: m.teamId,
+    metadata: { workspaceName: m.workspaceName, slug: m.slug },
+  }),
+  model_router_deleted: (m) => ({
+    action: "router.deleted",
+    targetType: "router",
+    targetId: m.routerId,
+    metadata: { routerId: m.routerId },
+  }),
+  // AP refusals: userId is the acting user when one is known.
+  // {tool: "agent" | <plugin>, check: "allow_agents" | "agent_tools"}
+  tool_refused_by_policy: (m, uid) => ({
+    action: "agent.tool_refused",
+    outcome: "denied",
+    reason: "policy",
+    actor: asActor(uid),
+    metadata: { tool: m.tool, check: m.check, policyId: m.policyId },
+  }),
+  // {provider, model, check: "allowed_models"}
+  model_refused_by_policy: (m, uid) => ({
+    action: "access.denied",
+    outcome: "denied",
+    reason: "policy",
+    actor: asActor(uid),
+    metadata: {
+      check: m.check || "allowed_models",
+      resource: [m.provider, m.model].filter(Boolean).join(":") || null,
+    },
+  }),
+  // {keyId}, with the key owner's id as userId
+  api_key_expired_refused: (m, uid) => ({
+    action: "api_key.expired_rejected",
+    outcome: "denied",
+    reason: "expired",
+    actor: {
+      type: "api_key",
+      id: m.keyId ?? m.apiKeyId,
+      onBehalfOf: uid,
+    },
+    metadata: { keyId: m.keyId ?? m.apiKeyId, check: "expiry" },
+  }),
+  // {reason: "no_valid_session"} with no user, or {reason: "other_user", invocationId}
+  agent_ws_rejected: (m, uid) => ({
+    action: "auth.ws_rejected",
+    outcome: "denied",
+    reason: m.reason || "rejected",
+    actor: asActor(uid),
+    metadata: { route: "agent-invocation" },
+  }),
   event_logs_cleared: () => ({ action: "audit.cleared" }),
 
   // Workspaces and chats

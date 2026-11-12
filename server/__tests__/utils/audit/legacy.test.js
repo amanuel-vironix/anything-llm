@@ -111,6 +111,56 @@ describe("EventLogs.logEvent wrapper", () => {
     });
   });
 
+  it("keeps only the email domain of a failed Google sign-in", async () => {
+    await EventLogs.logEvent("failed_login_oidc", {
+      ip: "1.1.1.1",
+      reason: "domain_not_allowed",
+      email: "pat.smith@example.com",
+      detail: "id_token for pat.smith@example.com rejected",
+    });
+    const row = await prisma.audit_events.findFirst();
+    expect(row).toMatchObject({
+      action: "auth.login_failed",
+      outcome: "failed",
+      reason: "domain_not_allowed",
+    });
+    expect(JSON.parse(row.metadata)).toEqual({
+      method: "oidc",
+      emailDomain: "example.com",
+    });
+    expect(JSON.stringify(row)).not.toContain("pat.smith");
+  });
+
+  it("records a refused ownerless API key as access.denied by that key", async () => {
+    await EventLogs.logEvent("legacy_api_key_refused", {
+      apiKeyId: 9,
+      path: "/v1/workspaces",
+    });
+    const row = await prisma.audit_events.findFirst();
+    expect(row).toMatchObject({
+      action: "access.denied",
+      outcome: "denied",
+      reason: "key_scope",
+      actor_type: "api_key",
+      actor_id: "9",
+    });
+  });
+
+  it("records an API key scope change with no secret", async () => {
+    await EventLogs.logEvent(
+      "api_key_updated",
+      { apiKeyId: 4, userId: 2, workspaceIds: [1, 3], secret: "sk-abc123" },
+      1
+    );
+    const row = await prisma.audit_events.findFirst();
+    expect(row).toMatchObject({ action: "api_key.updated", target_id: "4" });
+    expect(JSON.parse(row.metadata)).toEqual({
+      keyId: 4,
+      ownerId: 2,
+      workspaceIds: [1, 3],
+    });
+  });
+
   it("reports, rather than throws, a failed must_record write from a legacy caller", async () => {
     jest
       .spyOn(prisma.audit_events, "create")

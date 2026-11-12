@@ -162,7 +162,10 @@ function resolveActor(ctx) {
   if (ctx.channel === "api" || ctx.channel === "openai")
     // Developer keys have no owner or id in context until scoped keys land.
     return { actorType: "api_key", actorId: null, onBehalfOf: userId };
-  if (locals.embedConfig)
+  // Embed admin routes also put an embedConfig in locals, after
+  // validatedRequest has set a user or multiUserMode; only the widget's
+  // routes have an embedConfig and neither.
+  if (locals.embedConfig && !userId && locals.multiUserMode === undefined)
     return {
       actorType: "embed_session",
       actorId: locals.embedConfig.uuid ? String(locals.embedConfig.uuid) : null,

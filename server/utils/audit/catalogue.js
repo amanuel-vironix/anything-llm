@@ -51,7 +51,9 @@ const CHAT = [
 const CATALOGUE = {
   // 4.1 Sign-in and sessions
   "auth.login_succeeded": a("A", { metadata: ["method", "username"] }),
-  "auth.login_failed": a("A", { metadata: ["method", "username"] }),
+  "auth.login_failed": a("A", {
+    metadata: ["method", "username", "emailDomain"],
+  }),
   "auth.locked_out": a("CH", {
     must: true,
     metadata: ["username", "failures"],
@@ -204,7 +206,13 @@ const CATALOGUE = {
   // 4.3 Keys, devices and integrations
   "api_key.created": a("A", {
     must: true,
-    metadata: ["keyId", "ownerId", "scope", "expiresAt"],
+    metadata: ["keyId", "ownerId", "scope", "workspaceIds", "expiresAt"],
+    tables: ["api_keys"],
+  }),
+  // An owner, workspace scope or expiry change (access-policy branch).
+  "api_key.updated": a("AP", {
+    must: true,
+    metadata: ["keyId", "ownerId", "workspaceIds", "expiresAt"],
     tables: ["api_keys"],
   }),
   "api_key.deleted": a("A", {
@@ -281,6 +289,13 @@ const CATALOGUE = {
   "chat.deleted": a("A", {
     must: true,
     metadata: ["count", "workspaceSlug", "threadId"],
+    tables: ["workspace_chats"],
+  }),
+  // A user rewrote the stored text of their own prompt or of the answer.
+  // Which side was edited, never the text.
+  "chat.edited": a("A", {
+    must: true,
+    metadata: ["role", "workspaceSlug", "threadId"],
     tables: ["workspace_chats"],
   }),
   "chat.hidden": a("A", {
@@ -367,7 +382,7 @@ const CATALOGUE = {
   "agent.tool_approval": a("A", {
     metadata: ["tool", "decision", "invocationUuid"],
   }),
-  "agent.tool_refused": a("AP", { metadata: ["tool", "check"] }),
+  "agent.tool_refused": a("AP", { metadata: ["tool", "check", "policyId"] }),
   "agent.whitelist_added": a("GR", {
     must: true,
     metadata: ["tool"],
