@@ -713,7 +713,9 @@ function systemEndpoints(app) {
         await EventLogs.logEvent("multi_user_mode_enabled", {}, user?.id);
         response.status(200).json({ success: !!user, error });
       } catch (e) {
-        await User.delete({});
+        // Rolling back to single-user mode removes every user, so the
+        // last-admin guard does not apply here.
+        await User.delete({}, { allowNoActiveAdmin: true });
         await SystemSettings._updateSettings({
           multi_user_mode: false,
         });

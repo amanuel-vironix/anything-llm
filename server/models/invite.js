@@ -41,36 +41,75 @@ const Invite = {
     }
   },
 
-  markClaimed: async function (inviteId = null, user) {
+  invalidInviteError: "Invite not found or is invalid.",
+
+  /**
+   * Claims a pending invite and creates its user in one transaction.
+   *
+   * The claim is a conditional write (`updateMany where status = "pending"`)
+   * and only the caller whose write changed the row goes on to create a user,
+   * so one invite creates at most one account even when two claims race, and
+   * an invite disabled before the claim stays disabled (SMF-14).
+   *
+   * @param {string} code - the invite code
+   * @param {Object} userData - validated row data from `User.prepareCreate`
+   * @param {(tx: import("@prisma/client").Prisma.TransactionClient, user: Object) => Promise<void>} [afterCreate]
+   *   - extra writes that must commit with the user (for example a linked identity)
+   * @returns {Promise<{user: Object|null, invite: Object|null, error: string|null}>}
+   */
+  claim: async function (code, userData, afterCreate = null) {
+    const { User } = require("./user");
     try {
-      const invite = await prisma.invites.update({
-        where: { id: Number(inviteId) },
-        data: { status: "claimed", claimedBy: user.id },
+      const { user, invite } = await prisma.$transaction(async (tx) => {
+        const { count } = await tx.invites.updateMany({
+          where: { code: String(code), status: "pending" },
+          data: { status: "claimed" },
+        });
+        if (count !== 1) throw new Error(this.invalidInviteError);
+
+        const user = await tx.users.create({ data: userData });
+        const invite = await tx.invites.update({
+          where: { code: String(code) },
+          data: { claimedBy: user.id },
+        });
+        if (afterCreate) await afterCreate(tx, user);
+        return { user, invite };
       });
 
-      try {
-        if (!!invite?.workspaceIds) {
-          const { Workspace } = require("./workspace");
-          const { WorkspaceUser } = require("./workspaceUsers");
-          const workspaceIds = (await Workspace.where({})).map(
-            (workspace) => workspace.id
-          );
-          const ids = safeJsonParse(invite.workspaceIds)
-            .map((id) => Number(id))
-            .filter((id) => workspaceIds.includes(id));
-          if (ids.length !== 0) await WorkspaceUser.createMany(user.id, ids);
-        }
-      } catch (e) {
-        console.error(
-          "Could not add user to workspaces automatically",
-          e.message
-        );
-      }
-
-      return { success: true, error: null };
+      await this._addToInviteWorkspaces(invite, user);
+      return { user: User.filterFields(user), invite, error: null };
     } catch (error) {
-      console.error(error.message);
-      return { success: false, error: error.message };
+      console.error("FAILED TO CLAIM INVITE.", error.message);
+      return {
+        user: null,
+        invite: null,
+        error: User._identifyErrorAndFormatMessage(error),
+      };
+    }
+  },
+
+  /**
+   * Adds a new user to the invite's workspaces that still exist. Failures are
+   * logged and ignored: the account is usable without them and an admin can
+   * add the workspaces by hand.
+   */
+  _addToInviteWorkspaces: async function (invite, user) {
+    try {
+      if (!invite?.workspaceIds) return;
+      const { Workspace } = require("./workspace");
+      const { WorkspaceUser } = require("./workspaceUsers");
+      const workspaceIds = (await Workspace.where({})).map(
+        (workspace) => workspace.id
+      );
+      const ids = (safeJsonParse(invite.workspaceIds) || [])
+        .map((id) => Number(id))
+        .filter((id) => workspaceIds.includes(id));
+      if (ids.length !== 0) await WorkspaceUser.createMany(user.id, ids);
+    } catch (e) {
+      console.error(
+        "Could not add user to workspaces automatically",
+        e.message
+      );
     }
   },
 

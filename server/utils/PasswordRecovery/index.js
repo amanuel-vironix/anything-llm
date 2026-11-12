@@ -6,6 +6,8 @@ const {
   PasswordResetToken,
 } = require("../../models/passwordRecovery");
 const { dummyHashCompare } = require("../helpers/dummyHashCompare");
+const { EventLogs } = require("../../models/eventLogs");
+const prisma = require("../prisma");
 
 async function generateRecoveryCodes(userId) {
   const newRecoveryCodes = [];
@@ -83,22 +85,45 @@ async function resetPassword(token, _newPassword = "", confirmPassword = "") {
     return { success: false, message: "Invalid reset token" };
   }
 
-  // JOI password rules will be enforced inside .update.
-  const { error } = await User.update(resetToken.user_id, {
-    password: newPassword,
-  });
+  // Check the new password before changing anything, so a rejected password
+  // leaves the token, the recovery codes and seen_recovery_codes as they were
+  // and the user can try again (SMF-15, F-10).
+  const passwordCheck = User.checkPasswordComplexity(newPassword);
+  if (!passwordCheck.checkedOK)
+    return { success: false, message: passwordCheck.error };
+  const passwordHash = bcrypt.hashSync(newPassword, 10);
 
-  // seen_recovery_codes is not publicly writable
-  // so we have to do direct update here
-  await User._update(resetToken.user_id, {
-    seen_recovery_codes: false,
-  });
+  // Consume the token with a conditional delete and make every change in the
+  // same transaction: two resets with one token cannot both succeed, and a
+  // failure part-way leaves nothing half-applied.
+  const userId = resetToken.user_id;
+  let user;
+  try {
+    user = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.password_reset_tokens.deleteMany({
+        where: { id: resetToken.id, expiresAt: { gte: new Date() } },
+      });
+      if (count !== 1) throw new Error("Invalid reset token");
 
-  if (error) return { success: false, message: error };
-  await PasswordResetToken.deleteMany({ user_id: resetToken.user_id });
-  await RecoveryCode.deleteMany({ user_id: resetToken.user_id });
+      const user = await tx.users.update({
+        where: { id: userId },
+        // New codes are provided on first new login.
+        data: { password: passwordHash, seen_recovery_codes: false },
+      });
+      await tx.password_reset_tokens.deleteMany({ where: { user_id: userId } });
+      await tx.recovery_codes.deleteMany({ where: { user_id: userId } });
+      return user;
+    });
+  } catch (error) {
+    console.error("FAILED TO RESET PASSWORD.", error.message);
+    return { success: false, message: "Invalid reset token" };
+  }
 
-  // New codes are provided on first new login.
+  await EventLogs.logEvent(
+    "user_updated",
+    { username: user.username, changes: {} },
+    userId
+  );
   return { success: true, message: "Password reset successful" };
 }
 

@@ -11,31 +11,47 @@ const TemporaryAuthToken = {
   tablename: "temporary_auth_tokens",
   writable: [],
 
-  makeTempToken: () => {
+  /** Prefix of tokens minted through the developer API (Simple SSO). */
+  simpleSSOPrefix: "allm-tat-",
+  /** Prefix of tokens minted by the Google (OIDC) sign-in callback. */
+  oidcPrefix: "allm-oidc-",
+
+  makeTempToken: (prefix = "allm-tat-") => {
     const uuidAPIKey = require("uuid-apikey");
-    return `allm-tat-${uuidAPIKey.create().apiKey}`;
+    return `${prefix}${uuidAPIKey.create().apiKey}`;
   },
 
   /**
-   * Issues a temporary auth token for a user via its ID.
+   * Issues a temporary auth token for a user via its ID, replacing any
+   * earlier ones. The delete and the create run in one transaction, so two
+   * concurrent issues leave exactly one live token (SMF-32).
    * @param {number} userId
+   * @param {{prefix?: string}} options - `oidcPrefix` marks a token minted by
+   *   Google sign-in, which the swap endpoint accepts without Simple SSO.
    * @returns {Promise<{token: string|null, error: string | null}>}
    */
-  issue: async function (userId = null) {
+  issue: async function (
+    userId = null,
+    { prefix = this.simpleSSOPrefix } = {}
+  ) {
     if (!userId)
       throw new Error("User ID is required to issue a temporary auth token.");
-    await this.invalidateUserTokens(userId);
 
     try {
-      const token = this.makeTempToken();
+      const token = this.makeTempToken(prefix);
       const expiresAt = new Date(Date.now() + this.expiry);
-      await prisma.temporary_auth_tokens.create({
-        data: {
-          token,
-          expiresAt,
-          userId: Number(userId),
-        },
-      });
+      await prisma.$transaction([
+        prisma.temporary_auth_tokens.deleteMany({
+          where: { userId: Number(userId) },
+        }),
+        prisma.temporary_auth_tokens.create({
+          data: {
+            token,
+            expiresAt,
+            userId: Number(userId),
+          },
+        }),
+      ]);
 
       return { token, error: null };
     } catch (error) {

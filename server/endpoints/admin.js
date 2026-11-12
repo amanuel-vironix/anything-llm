@@ -141,8 +141,16 @@ function adminEndpoints(app) {
           return;
         }
 
+        const { success, error } = await User.deleteWithReason({
+          id: Number(id),
+        });
+        if (!success) {
+          response.status(200).json({ success: false, error });
+          return;
+        }
+        // Extension keys also cascade with the user row; kept as before, now
+        // after the delete so a refused delete leaves the keys in place.
         await BrowserExtensionApiKey.deleteAllForUser(Number(id));
-        await User.delete({ id: Number(id) });
         await EventLogs.logEvent(
           "user_deleted",
           {
