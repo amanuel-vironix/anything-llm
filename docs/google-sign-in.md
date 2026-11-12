@@ -26,6 +26,13 @@ account that later gets the same email address can't take over an account.
 Every refusal is written to the event log as `failed_login_oidc`, with the
 reason. Successful sign-ins are logged as `login_event` with `method: "oidc"`.
 
+Known limitation: after Google returns, the browser gets a one-time link
+(`/sso/simple?token=…`, valid 10 minutes) that is not tied to that browser.
+Someone in an allowed domain could stop at that link and send it to a
+colleague, who would then be signed in as the sender (login CSRF). It grants
+nothing beyond the sender's own account. Simple SSO links have the same
+property. Binding the link to a cookie set on the callback would close it.
+
 ## 1. Create the OAuth client in Google Cloud
 
 Do this as a Google Workspace admin, or as someone with rights to create
@@ -100,6 +107,13 @@ Two more settings are environment-only:
 The post-sign-in address always comes from configuration, never from request
 headers, so a forged `Host` header can't redirect a login.
 
+Settings that come from environment variables are checked the same way as a
+save from the page, each time they are read. If the configuration in force
+is invalid (for example `OIDC_DEFAULT_ROLE=admin`, an unknown
+`OIDC_PROVISIONING`, or an `http` issuer), Google sign-in is treated as off
+and password sign-in works for everyone. The server logs why, and the
+Security page marks the fields.
+
 ## How new accounts are created
 
 - **Create on first sign-in** (`auto`): the first time a verified `@vironix.ai`
@@ -135,6 +149,10 @@ Before you turn this on:
 
 Password sign-in can only be turned off while Google sign-in is on. Turning
 Google sign-in off restores password sign-in for everyone.
+
+Turning password sign-in off does not end sessions that already exist.
+Someone who signed in with a password before keeps that session until it
+expires (`JWT_EXPIRY`, 30 days by default). Sessions can't be revoked yet.
 
 ## Troubleshooting
 

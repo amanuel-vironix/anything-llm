@@ -181,17 +181,23 @@ function checkClaims(claims, allowedDomains) {
 
 /**
  * A username for a new account, from the email. `attempt` > 0 adds a suffix
- * to the local part when the plain one is taken.
+ * to the local part when the plain one is taken. Long addresses are shortened
+ * in the local part, so the suffix survives the 64-character limit and each
+ * attempt gives a different name.
  */
 function usernameFor(email, attempt = 0) {
-  let candidate = String(email).toLowerCase();
-  if (attempt > 0) {
-    const at = candidate.lastIndexOf("@");
-    candidate = `${candidate.slice(0, at)}.${attempt + 1}${candidate.slice(at)}`;
-  }
-  candidate = candidate.replace(/[^a-z0-9._@-]/g, "-");
+  const MAX = 64;
+  let candidate = String(email)
+    .toLowerCase()
+    .replace(/[^a-z0-9._@-]/g, "-");
   if (!/^[a-z]/.test(candidate)) candidate = `u${candidate}`;
-  return candidate.slice(0, 64);
+  const at = candidate.lastIndexOf("@");
+  const local = at >= 0 ? candidate.slice(0, at) : candidate;
+  const domain = at >= 0 ? candidate.slice(at) : "";
+  const suffix = attempt > 0 ? `.${attempt + 1}` : "";
+  const room = MAX - suffix.length - domain.length;
+  if (room >= 1) return `${local.slice(0, room)}${suffix}${domain}`;
+  return `${(local + domain).slice(0, MAX - suffix.length)}${suffix}`;
 }
 
 function isUsernameConflict(error) {

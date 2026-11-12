@@ -111,10 +111,23 @@ function normalize(key, value) {
   return String(value ?? "").trim();
 }
 
+let cachedEncryptionManager = null;
+/**
+ * One EncryptionManager per process. Its constructor derives the key with
+ * scrypt (tens of milliseconds of blocked event loop), too slow to repeat on
+ * every request.
+ */
 function encryptionManager() {
-  const { EncryptionManager } = require("../EncryptionManager");
-  return new EncryptionManager();
+  if (!cachedEncryptionManager) {
+    const { EncryptionManager } = require("../EncryptionManager");
+    cachedEncryptionManager = new EncryptionManager();
+  }
+  return cachedEncryptionManager;
 }
+
+// Stands in for a stored secret when the caller does not need its value, so
+// validation still sees that one is set.
+const UNREAD_SECRET = "(stored)";
 
 /** The fields whose value comes from the environment rather than the database. */
 function envOverrides() {
@@ -122,10 +135,12 @@ function envOverrides() {
 }
 
 /**
- * Reads the stored settings (decrypted), without environment overrides.
+ * Reads the stored settings, without environment overrides. The secret is
+ * decrypted only when `decryptSecret` is set.
+ * @param {{decryptSecret?: boolean}} options
  * @returns {Promise<OidcSettings>}
  */
-async function readStored() {
+async function readStored({ decryptSecret = true } = {}) {
   const rows = await prisma.system_settings.findMany({
     where: { label: { in: Object.values(FIELDS).map((f) => f.label) } },
   });
@@ -135,7 +150,9 @@ async function readStored() {
     const value = byLabel[field.label];
     if (value === undefined || value === null) continue;
     if (field.type === "secret") {
-      stored[key] = value ? encryptionManager().decrypt(value) || "" : "";
+      if (!value) stored[key] = "";
+      else if (!decryptSecret) stored[key] = UNREAD_SECRET;
+      else stored[key] = encryptionManager().decrypt(value) || "";
       continue;
     }
     stored[key] = normalize(key, value);
@@ -151,12 +168,43 @@ function withEnv(settings) {
   return effective;
 }
 
+let lastLoggedConfigErrors = "";
+
 /**
- * The settings in force: stored values with environment overrides applied.
- * @returns {Promise<OidcSettings>}
+ * The settings in force: stored values with environment overrides applied,
+ * then validated. Configuration that comes only from environment variables
+ * (or was stored before an override was removed) never went through a save,
+ * so it is checked here too. An invalid configuration is treated as turned
+ * off: Google sign-in disabled and password sign-in on for everyone. The
+ * problems are logged once and returned in `configErrors`.
+ *
+ * @param {{decryptSecret?: boolean}} options - leave the secret encrypted
+ *   when the caller only needs the flags (public and per-request checks)
+ * @returns {Promise<OidcSettings & {configErrors: Object<string, string>}>}
  */
-async function getOidcSettings() {
-  return withEnv(await readStored());
+async function getOidcSettings({ decryptSecret = true } = {}) {
+  const { SystemSettings } = require("../../models/systemSettings");
+  const effective = withEnv(await readStored({ decryptSecret }));
+  const configErrors = validateOidcSettings(effective, {
+    multiUserMode: await SystemSettings.isMultiUserMode(),
+  });
+  if (Object.keys(configErrors).length === 0)
+    return { ...effective, configErrors };
+
+  const summary = JSON.stringify(configErrors);
+  if (effective.enabled && summary !== lastLoggedConfigErrors) {
+    lastLoggedConfigErrors = summary;
+    console.error(
+      "GOOGLE SIGN-IN IS TURNED OFF: its configuration is invalid.",
+      summary
+    );
+  }
+  return {
+    ...effective,
+    enabled: false,
+    passwordLoginDisabled: false,
+    configErrors,
+  };
 }
 
 const DOMAIN_PATTERN =
@@ -271,21 +319,28 @@ async function saveOidcSettings(input = {}) {
  * @returns {Promise<Object>}
  */
 async function oidcSettingsForDisplay() {
-  const settings = await getOidcSettings();
+  // What the admin configured, not the forced-off view, so the form shows
+  // their values; `configErrors` says why it is not in force.
+  const configured = withEnv(await readStored({ decryptSecret: false }));
+  const { configErrors } = await getOidcSettings({ decryptSecret: false });
   return {
-    ...settings,
-    clientSecret: settings.clientSecret ? SECRET_MASK : "",
+    ...configured,
+    clientSecret: configured.clientSecret ? SECRET_MASK : "",
     envOverrides: envOverrides(),
+    configErrors,
   };
 }
 
 /**
  * Whether password sign-in is turned off for non-admins. Only true while
- * Google sign-in is enabled, so a stale flag cannot lock users out.
+ * Google sign-in is enabled with a valid configuration, so a stale flag or a
+ * broken configuration cannot lock users out.
  * @returns {Promise<boolean>}
  */
 async function passwordLoginRestricted() {
-  const { enabled, passwordLoginDisabled } = await getOidcSettings();
+  const { enabled, passwordLoginDisabled } = await getOidcSettings({
+    decryptSecret: false,
+  });
   return enabled && passwordLoginDisabled;
 }
 

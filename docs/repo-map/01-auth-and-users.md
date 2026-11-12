@@ -54,7 +54,7 @@ This file covers identity, sessions and accounts. That means first-run setup, si
 
 | Invariant | Enforced? | Where |
 |---|---|---|
-| At least one **active** (unsuspended) admin exists after a role change, suspension or delete | **Yes** (fixed in `238fe3f3`, F-09 / SMF-13) | `User._withActiveAdminGuard` (`server/models/user.js:125-134`) runs the write and then counts `role=admin, suspended=0` in the same transaction, throwing `lastAdminError` when none remain. Used by `User.update` when `removesActiveAdmin` (`:107,287`) and by `User.delete`/`deleteWithReason` (`:401-438`). `canModifyAdmin` (`server/utils/helpers/admin/index.js`) remains as an early, friendlier check. Only the enable-multi-user rollback passes `allowNoActiveAdmin` |
+| At least one **active** (unsuspended) admin exists after a role change, suspension or delete | **Yes** (fixed in `238fe3f3`, F-09 / SMF-13) | `User._withActiveAdminGuard` (`server/models/user.js`) re-reads the target inside the transaction to decide whether the write removes an active admin, runs the write, then counts `role=admin, suspended=0` and throws `lastAdminError` when none remain. `User.update` uses it for every change to `role` or `suspended`, and `User.delete`/`deleteWithReason` for every delete, so a decision can't rest on a stale read taken before a concurrent promotion. `canModifyAdmin` (`server/utils/helpers/admin/index.js`) remains as an early, friendlier check. Only the enable-multi-user rollback passes `allowNoActiveAdmin` |
 | Admin-count check is atomic | **Yes** | the guard is write-then-count inside one transaction; tested with concurrent suspends and deletes (`server/__tests__/models/userLastAdminGuard.test.js`) |
 | Managers cannot raise anyone to admin, or touch admins | Yes, in the UI routes | `validRoleSelection`/`validCanModify` `server/utils/helpers/admin/index.js:7-50` |
 | The developer API respects roles | **No.** Any API key acts as a super-admin | `server/endpoints/api/admin/index.js:85-136` (create any role), `:143-208` (update any user) |
@@ -305,8 +305,8 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Steps:**
   1. The `/sso/simple` page clears storage and calls `System.simpleSSOLogin(token)` (`frontend/src/pages/Login/SSO/simple.jsx:19-29`, `frontend/src/models/system.js:812`).
   2. GET `/request-token/sso/simple?token=` → simpleSSOEnabled (`server/endpoints/system.js:360-363`).
-  3. `TemporaryAuthToken.validate`: look up the token with its user. Reject if missing, expired or suspended. On success `makeJWT({id,username})`. In `finally`, **delete the token whenever the row was found**, success or not (`server/models/temporaryAuthToken.js:69-101`).
-  4. On error: log, then 401 with the reason string (`server/endpoints/system.js:368-378`). On success: telemetry, log, and the token returned (`:380-399`).
+  3. `TemporaryAuthToken.validate`: look up the token with its user, then consume it with a conditional `deleteMany` by id. Only the caller whose delete removed the row continues; a concurrent second swap gets an error instead of a session (SMF-01; same change as `615056a9` on the audit branch). Reject if expired or suspended. On success `makeJWT({id,username})`, re-signed with `OIDC_SESSION_EXPIRY` for `allm-oidc-` tokens.
+  4. On error: log, then 401 with the reason string. On success: telemetry, log, and the token returned. The route body (`swapTemporaryToken`, `server/endpoints/system.js`) runs inside a try/catch, so any throw is a 500, never an unhandled rejection.
 - **State changes:** `temporary_auth_tokens`: row deleted.
 - **Side effects:** SE-AUTH-19 (DB delete), SE-AUTH-20 (LOG `failed_login_invalid_temporary_auth_token` / `login_event`), SE-AUTH-21 (TEL).
 - **Notes:** the token travels in a query string, so it can end up in proxy or access logs. The single-use deletion limits the damage. Failure messages reveal "expired" and "suspended". SSO-only mode (`SIMPLE_SSO_NO_LOGIN`) does not block this route.
@@ -549,7 +549,10 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **State changes:** `users` row created (auto/invite); `user_identities` row created or `lastLoginAt`/`email` updated; `invites.status: pending → claimed`; `temporary_auth_tokens` replaced.
 - **Side effects:** SE-AUTH-49 (NET:google token + JWKS), SE-AUTH-50 (DB), SE-AUTH-51 (LOG).
 - **Failure and edge paths:** every refusal (`REFUSALS`, `server/utils/auth/oidc.js:30`: state, provider error, token verification, unverified email, domain, `hd`, no account, suspended, invite invalid, disabled) logs `failed_login_oidc` with `reason`, the email when known, and a detail, then redirects to `/login?sso_error=<reason>`. Two concurrent first sign-ins of the same Google account create one user (`server/__tests__/endpoints/oidc.test.js`).
-- **Notes:** an existing password account with the same email is **not** linked; a separate account is created. Linking from the account menu is not built.
+- **Notes:**
+  - An existing password account with the same email is **not** linked; a separate account is created. Linking from the account menu is not built.
+  - The configuration in force is validated on every read (`getOidcSettings`, `server/utils/auth/oidcSettings.js`), including env-only configuration. When it's invalid, Google sign-in counts as off and password sign-in is on for everyone.
+  - Login CSRF (known, low impact): the `/sso/simple?token=` link isn't bound to the browser that started the flow. Someone in an allowed domain can send theirs to a colleague, who is then signed in as the sender. Simple SSO has the same property.
 
 ### P-AUTH-33 — Google sign-in settings
 - **Actor and preconditions:** multi-user admin. Settings → Security → Google sign-in (`frontend/src/pages/GeneralSettings/Security/GoogleSignIn.jsx`).

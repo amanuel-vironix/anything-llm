@@ -53,3 +53,28 @@ describe("TemporaryAuthToken.issue", () => {
     expect(token).toMatch(pattern);
   });
 });
+
+describe("TemporaryAuthToken.validate (review finding, SMF-01)", () => {
+  // The audit branch carries the same fix in 615056a9.
+  it("gives a session to exactly one of two concurrent swaps and never throws", async () => {
+    process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret";
+    const { token } = await TemporaryAuthToken.issue(user.id, {
+      prefix: TemporaryAuthToken.oidcPrefix,
+    });
+
+    const results = await Promise.allSettled([
+      TemporaryAuthToken.validate(token),
+      TemporaryAuthToken.validate(token),
+    ]);
+
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
+    const sessions = results.filter((r) => r.value.sessionToken);
+    expect(sessions).toHaveLength(1);
+    // The loser sees "Invalid token." or, when SQLite is busy, a DB error;
+    // either way it gets no session and validate resolves instead of throwing.
+    expect(results.find((r) => !r.value.sessionToken).value.error).toEqual(
+      expect.any(String)
+    );
+    expect(await prisma.temporary_auth_tokens.count()).toBe(0);
+  });
+});

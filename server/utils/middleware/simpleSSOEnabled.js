@@ -57,10 +57,15 @@ async function simpleSSOOrOidcToken(request, response, next) {
   if (!isOidcLoginToken(request.query?.token))
     return simpleSSOEnabled(request, response, next);
 
-  const { getOidcSettings } = require("../auth/oidcSettings");
-  const { enabled } = await getOidcSettings();
-  if (!enabled || !(await SystemSettings.isMultiUserMode()))
-    return response.status(403).send("Google sign-in is not enabled.");
+  try {
+    const { getOidcSettings } = require("../auth/oidcSettings");
+    const { enabled } = await getOidcSettings({ decryptSecret: false });
+    if (!enabled || !(await SystemSettings.isMultiUserMode()))
+      return response.status(403).send("Google sign-in is not enabled.");
+  } catch (error) {
+    console.error("FAILED TO CHECK GOOGLE SIGN-IN SETTINGS.", error.message);
+    return response.sendStatus(500).end();
+  }
   next();
 }
 

@@ -36,6 +36,9 @@ export default function GoogleSignIn() {
         allowedDomains: (result.allowedDomains || []).join(", "),
         redirectUri: result.redirectUri || suggestedRedirectUri(),
       });
+      // A configuration that is not valid (for example one set only by
+      // environment variables) is not in force; show why.
+      setErrors(result.configErrors || {});
     });
   }, []);
 
@@ -48,7 +51,11 @@ export default function GoogleSignIn() {
 
   const handleSave = async () => {
     setSaving(true);
-    const { envOverrides: _envOverrides, ...payload } = settings;
+    const {
+      envOverrides: _envOverrides,
+      configErrors: _configErrors,
+      ...payload
+    } = settings;
     const { success, errors } = await Admin.updateOidcSettings(payload);
     setSaving(false);
     setErrors(errors || {});

@@ -157,3 +157,40 @@ describe("canModifyAdmin", () => {
     expect((await canModifyAdmin(a, { suspended: 1 })).valid).toBe(true);
   });
 });
+
+describe("guard with a stale read of the target (review finding)", () => {
+  // Interleaving: R2 reads B while B is still a default user, R0 promotes B,
+  // R1 demotes A (B now counts as the active admin), then R2's write lands.
+  // The guard must run on R2's write even though its read said "not admin".
+  it("refuses a suspension decided on a stale 'not an admin' read", async () => {
+    const a = await makeUser("a");
+    const b = await makeUser("b", "default");
+    const staleB = await prisma.users.findUnique({ where: { id: b.id } });
+    expect((await User.update(b.id, { role: "admin" })).success).toBe(true);
+    expect((await User.update(a.id, { role: "default" })).success).toBe(true);
+
+    const spy = jest
+      .spyOn(prisma.users, "findUnique")
+      .mockResolvedValueOnce(staleB);
+    const result = await User.update(b.id, { suspended: 1 });
+    spy.mockRestore();
+
+    expect(result).toEqual({ success: false, error: User.lastAdminError });
+    expect(await activeAdminCount()).toBe(1);
+  });
+
+  it("refuses a delete that would leave no active admin even after a concurrent promotion", async () => {
+    const a = await makeUser("a");
+    const b = await makeUser("b", "default");
+    expect((await User.update(b.id, { role: "admin" })).success).toBe(true);
+    expect((await User.update(a.id, { role: "default" })).success).toBe(true);
+
+    // A pre-check read before the promotion would have seen no admin in the clause.
+    const spy = jest.spyOn(prisma.users, "count").mockResolvedValueOnce(0);
+    const result = await User.deleteWithReason({ id: b.id });
+    spy.mockRestore();
+
+    expect(result).toEqual({ success: false, error: User.lastAdminError });
+    expect(await activeAdminCount()).toBe(1);
+  });
+});

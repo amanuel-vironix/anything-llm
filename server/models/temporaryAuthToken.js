@@ -96,6 +96,16 @@ const TemporaryAuthToken = {
         include: { user: true },
       });
       if (!token) throw new Error("Invalid token.");
+
+      // Consume the token before checking or issuing anything. deleteMany is
+      // a single conditional write, so when the same token is presented twice
+      // at once only one caller removes the row and only that caller may get
+      // a session. The other sees count 0 and is treated as an invalid token.
+      const { count } = await prisma.temporary_auth_tokens.deleteMany({
+        where: { id: token.id },
+      });
+      if (count === 0) throw new Error("Invalid token.");
+
       if (token.expiresAt < new Date()) throw new Error("Token expired.");
       if (token.user.suspended) throw new Error("User account suspended.");
 
@@ -109,10 +119,6 @@ const TemporaryAuthToken = {
     } catch (error) {
       console.error("FAILED TO VALIDATE TEMPORARY AUTH TOKEN.", error.message);
       return { sessionToken: null, token: null, error: error.message };
-    } finally {
-      // Delete the token after it has been used under all circumstances if it was retrieved
-      if (token)
-        await prisma.temporary_auth_tokens.delete({ where: { id: token.id } });
     }
   },
 };

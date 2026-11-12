@@ -53,6 +53,20 @@ describe("usernameFor", () => {
     for (const email of [long, "_x@vironix.ai", "ü@vironix.ai"])
       expect(() => User.validations.username(usernameFor(email))).not.toThrow();
   });
+
+  it("keeps the suffix and the domain for a long address, so retries differ", () => {
+    const long = `${"a".repeat(80)}@vironix.ai`;
+
+    const names = [0, 1, 2].map((attempt) => usernameFor(long, attempt));
+
+    expect(new Set(names).size).toBe(3);
+    for (const name of names) {
+      expect(name.length).toBeLessThanOrEqual(64);
+      expect(name.endsWith("@vironix.ai")).toBe(true);
+      expect(() => User.validations.username(name)).not.toThrow();
+    }
+    expect(names[1]).toMatch(/\.2@vironix\.ai$/);
+  });
 });
 
 describe("readCookie", () => {

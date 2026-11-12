@@ -44,8 +44,9 @@ function oidcEndpoints(app) {
    * round trip for invite-only provisioning.
    */
   app.get("/auth/oidc/start", async (request, response) => {
-    const settings = await getOidcSettings();
+    let settings = {};
     try {
+      settings = await getOidcSettings();
       if (!settings.enabled || !(await SystemSettings.isMultiUserMode()))
         return toLogin(response, settings, "disabled");
 
@@ -66,9 +67,10 @@ function oidcEndpoints(app) {
    * swaps it for a session.
    */
   app.get("/auth/oidc/callback", async (request, response) => {
-    const settings = await getOidcSettings();
+    let settings = {};
     const ip = request.ip || "Unknown IP";
     try {
+      settings = await getOidcSettings();
       const stateCookie = readCookie(request.headers?.cookie, STATE_COOKIE);
       response.clearCookie(STATE_COOKIE, {
         ...stateCookieOptions(settings),

@@ -114,17 +114,38 @@ const User = {
   },
 
   /**
+   * Whether `updates` touches the fields that decide who is an active admin.
+   * Such writes always run inside `_withActiveAdminGuard`.
+   * @param {Object} updates
+   * @returns {boolean}
+   */
+  changesAdminStanding: function (updates = {}) {
+    return (
+      updates.hasOwnProperty("role") || updates.hasOwnProperty("suspended")
+    );
+  },
+
+  /**
    * Runs `write` and the check that at least one active admin remains in one
-   * transaction, and rolls the write back when none would. The write runs
-   * first, so in SQLite it takes the write lock before the count is read and
-   * two concurrent demotions cannot both pass on a stale count (SMF-13).
+   * transaction, and rolls the write back when none would (SMF-13).
+   *
+   * `removesAdmin(tx)` decides, from rows read inside the transaction, whether
+   * this write takes away an active admin. Only then is the count enforced, so
+   * an instance that already has none (for example after a database edit) can
+   * still manage its other users. Reading inside the transaction matters: a
+   * decision made on a read outside it can be stale by the time the write
+   * commits (a concurrent promotion). SQLite serialises the two writers; the
+   * one whose read went stale gets a busy error instead of committing.
    * @template T
    * @param {(tx: import("@prisma/client").Prisma.TransactionClient) => Promise<T>} write
+   * @param {(tx: import("@prisma/client").Prisma.TransactionClient) => Promise<boolean>} removesAdmin
    * @returns {Promise<T>} the write's result; throws `lastAdminError` when refused.
    */
-  _withActiveAdminGuard: async function (write) {
+  _withActiveAdminGuard: async function (write, removesAdmin) {
     return prisma.$transaction(async (tx) => {
+      const enforce = await removesAdmin(tx);
       const result = await write(tx);
+      if (!enforce) return result;
       const activeAdmins = await tx.users.count({
         where: { role: "admin", suspended: 0 },
       });
@@ -284,8 +305,17 @@ const User = {
           where: { id: parseInt(userId) },
           data: updates,
         });
-      const user = this.removesActiveAdmin(currentUser, updates)
-        ? await this._withActiveAdminGuard(write)
+      // Any role or suspension change is guarded, not only the ones that look
+      // like they remove an admin: `currentUser` was read outside the
+      // transaction, so a concurrent promotion can make a stale "not an admin"
+      // read wrong by the time this write commits.
+      const user = this.changesAdminStanding(updates)
+        ? await this._withActiveAdminGuard(write, async (tx) =>
+            this.removesActiveAdmin(
+              await tx.users.findUnique({ where: { id: parseInt(userId) } }),
+              updates
+            )
+          )
         : await write(prisma);
 
       await EventLogs.logEvent(
@@ -423,13 +453,17 @@ const User = {
         });
         await tx.users.deleteMany({ where: clause });
       };
-      const removesActiveAdmin =
-        !allowNoActiveAdmin &&
-        (await prisma.users.count({
-          where: { AND: [clause, { role: "admin", suspended: 0 }] },
-        })) > 0;
-      if (removesActiveAdmin) await this._withActiveAdminGuard(write);
-      else await prisma.$transaction(write);
+      // Decided inside the transaction: a count read outside it would let a
+      // delete racing a promotion leave no active admin.
+      if (allowNoActiveAdmin) await prisma.$transaction(write);
+      else
+        await this._withActiveAdminGuard(
+          write,
+          async (tx) =>
+            (await tx.users.count({
+              where: { AND: [clause, { role: "admin", suspended: 0 }] },
+            })) > 0
+        );
       return { success: true, error: null };
     } catch (error) {
       console.error(error.message);

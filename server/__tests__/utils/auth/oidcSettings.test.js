@@ -66,6 +66,7 @@ describe("saveOidcSettings", () => {
     expect(await getOidcSettings()).toEqual({
       ...VALID,
       allowedDomains: ["vironix.ai"],
+      configErrors: {},
     });
   });
 
@@ -158,6 +159,51 @@ describe("environment overrides", () => {
     const result = await saveOidcSettings(VALID);
 
     expect(result.errors).toHaveProperty("redirectUri");
+  });
+});
+
+describe("configuration that never went through a save (review finding)", () => {
+  // Env-only deployments: these values are read, not saved, so they are
+  // validated at read time and an invalid set turns Google sign-in off.
+  it.each([
+    ["an admin default role", { OIDC_DEFAULT_ROLE: "admin" }, "defaultRole"],
+    ["an unknown provisioning mode", { OIDC_PROVISIONING: "autoo" }, "provisioning"],
+    ["an http issuer", { OIDC_ISSUER: "http://accounts.example.com" }, "issuer"],
+    ["no allowed domain", { OIDC_ALLOWED_DOMAINS: "" }, "allowedDomains"],
+  ])("turns Google sign-in off for %s", async (_name, env, field) => {
+    Object.assign(process.env, {
+      OIDC_ENABLED: "true",
+      OIDC_ISSUER: VALID.issuer,
+      OIDC_CLIENT_ID: VALID.clientId,
+      OIDC_CLIENT_SECRET: VALID.clientSecret,
+      OIDC_REDIRECT_URI: VALID.redirectUri,
+      OIDC_ALLOWED_DOMAINS: "vironix.ai",
+      OIDC_ONLY: "true",
+      ...env,
+    });
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    const settings = await getOidcSettings();
+    errorSpy.mockRestore();
+
+    expect(settings.enabled).toBe(false);
+    expect(settings.configErrors).toHaveProperty(field);
+    expect(await passwordLoginRestricted()).toBe(false);
+  });
+
+  it("leaves a valid env-only configuration on", async () => {
+    Object.assign(process.env, {
+      OIDC_ENABLED: "true",
+      OIDC_CLIENT_ID: VALID.clientId,
+      OIDC_CLIENT_SECRET: VALID.clientSecret,
+      OIDC_REDIRECT_URI: VALID.redirectUri,
+      OIDC_ALLOWED_DOMAINS: "vironix.ai",
+    });
+
+    const settings = await getOidcSettings();
+
+    expect(settings.enabled).toBe(true);
+    expect(settings.configErrors).toEqual({});
   });
 });
 

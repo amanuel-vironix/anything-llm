@@ -1163,7 +1163,9 @@ const SystemSettings = {
   oidcPublicSettings: async function () {
     try {
       const { getOidcSettings } = require("../utils/auth/oidcSettings");
-      const { enabled, passwordLoginDisabled } = await getOidcSettings();
+      const { enabled, passwordLoginDisabled } = await getOidcSettings({
+        decryptSecret: false,
+      });
       const multiUserMode = await this.isMultiUserMode();
       return {
         OidcEnabled: enabled && multiUserMode,

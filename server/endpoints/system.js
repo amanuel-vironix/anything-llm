@@ -390,55 +390,68 @@ function systemEndpoints(app) {
     "/request-token/sso/simple",
     [simpleSSOOrOidcToken],
     async (request, response) => {
-      const { token: tempAuthToken } = request.query;
-      const fromOidc = isOidcLoginToken(tempAuthToken);
-      const validated = await TemporaryAuthToken.validate(tempAuthToken);
-      const { token, error } = validated;
-      // Sessions started through Google sign-in are shorter
-      // (OIDC_SESSION_EXPIRY, default 12h), so disabling someone's Google
-      // account ends their AnythingLLM access within that time.
-      const sessionToken =
-        fromOidc && !error
-          ? makeJWT(
-              { id: token.user.id, username: token.user.username },
-              oidcSessionExpiry()
-            )
-          : validated.sessionToken;
-
-      if (error) {
-        await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {
-          ip: request.ip || "Unknown IP",
-          multiUserMode: true,
-        });
-        return response.status(401).json({
-          valid: false,
-          token: null,
-          message: `[001] An error occurred while validating the token: ${error}`,
-        });
+      try {
+        await swapTemporaryToken(request, response);
+      } catch (error) {
+        console.error("FAILED TO SWAP TEMPORARY AUTH TOKEN.", error.message);
+        response.sendStatus(500).end();
       }
-
-      await Telemetry.sendTelemetry(
-        "login_event",
-        { multiUserMode: true },
-        token.user.id
-      );
-      await EventLogs.logEvent(
-        "login_event",
-        {
-          ip: request.ip || "Unknown IP",
-          username: token.user.username || "Unknown user",
-        },
-        token.user.id
-      );
-
-      response.status(200).json({
-        valid: true,
-        user: User.filterFields(token.user),
-        token: sessionToken,
-        message: null,
-      });
     }
   );
+
+  /**
+   * Swaps a one-time token (Simple SSO or Google sign-in) for a session.
+   * Called only from the route above, which turns any throw into a 500.
+   */
+  async function swapTemporaryToken(request, response) {
+    const { token: tempAuthToken } = request.query;
+    const fromOidc = isOidcLoginToken(tempAuthToken);
+    const validated = await TemporaryAuthToken.validate(tempAuthToken);
+    const { token, error } = validated;
+    // Sessions started through Google sign-in are shorter
+    // (OIDC_SESSION_EXPIRY, default 12h), so disabling someone's Google
+    // account ends their AnythingLLM access within that time.
+    const sessionToken =
+      fromOidc && !error
+        ? makeJWT(
+            { id: token.user.id, username: token.user.username },
+            oidcSessionExpiry()
+          )
+        : validated.sessionToken;
+
+    if (error) {
+      await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {
+        ip: request.ip || "Unknown IP",
+        multiUserMode: true,
+      });
+      return response.status(401).json({
+        valid: false,
+        token: null,
+        message: `[001] An error occurred while validating the token: ${error}`,
+      });
+    }
+
+    await Telemetry.sendTelemetry(
+      "login_event",
+      { multiUserMode: true },
+      token.user.id
+    );
+    await EventLogs.logEvent(
+      "login_event",
+      {
+        ip: request.ip || "Unknown IP",
+        username: token.user.username || "Unknown user",
+      },
+      token.user.id
+    );
+
+    response.status(200).json({
+      valid: true,
+      user: User.filterFields(token.user),
+      token: sessionToken,
+      message: null,
+    });
+  }
 
   app.post(
     "/system/recover-account",
