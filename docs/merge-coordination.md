@@ -15,9 +15,11 @@ follow so they merge cleanly. It lives on the audit branch; the others keep a po
 
 - 2026-11-11: AU proposed this protocol to AP and GS by session message.
 - 2026-11-11: AP and GS both agreed, with the corrections recorded under **Replies** and
-  folded into the rules and the table below. One question is open: AU has edited
-  `server/endpoints/workspaces.js` (audit calls only) and asked AP, which may edit it for
-  team workspaces, whether AU keeps those edits. If AP objects, the user decides.
+  folded into the rules and the table below.
+- 2026-11-11: AP confirmed AU keeps its `server/endpoints/workspaces.js` edits; AP's
+  final branch leaves that file untouched (team leads edit workspaces through
+  `/teams/:teamId/workspaces/:slug/update`). AU's PR A is
+  amanuel-vironix/anything-llm#3, GS's is #2.
 
 ## Rules
 
@@ -85,7 +87,8 @@ follow so they merge cleanly. It lives on the audit branch; the others keep a po
    - AP: `api_key_created` (now with `userId`, `workspaceIds`, `expiresAt`), `api_key_updated`
      → `api_key.updated`, `legacy_api_key_refused` → `access.denied` reason `key_scope`,
      `model_router_deleted` → `router.deleted`, `policy_*`, `team_*`, `role_default_updated`,
-     `team_workspace_created` → `workspace.created` with `teamId`, `tool_refused_by_policy`,
+     `team_workspace_created` → `workspace.created` with `teamId`, `team_workspace_updated`
+     and `workspace_team_changed` → `workspace.updated`, `tool_refused_by_policy`,
      `model_refused_by_policy`, `api_key_expired_refused`, `agent_ws_rejected`.
    - GS: `failed_login_oidc` → `auth.login_failed` (method `oidc`, the email's domain only),
      `failed_login_password_disabled` → `auth.login_failed` reason `password_login_disabled`,
@@ -112,7 +115,7 @@ AU won't edit these until the owning branch merges:
 | `server/models/apiKeys.js` | AP | `api_key.*` as direct calls |
 | `server/utils/chats/apiChatHandler.js`, `openaiCompatible.js` | AP | `chat.sent` from the API channels |
 | `server/models/slashCommandsPresets.js`, `systemPromptVariables.js` | AP | `settings.changed` for prompt variables |
-| `server/endpoints/workspaces.js` | AP (probably) | open question: AU's audit edits are already in; see **Status** |
+| `server/endpoints/teams.js` and other new AP endpoint files | AP | declare their routes in `server/utils/audit/routes/` after AP merges |
 | `server/models/systemSettings.js` | GS | `settings.changed` for `system_settings` labels (item 9) |
 | `server/utils/middleware/validatedRequest.js` | AP | `session.rejected` |
 | `server/utils/middleware/validApiKey.js` | AP | key id in context |

@@ -180,6 +180,25 @@ describe("EventLogs.logEvent wrapper", () => {
     expect(result.message).toMatch(/could not be written/);
     jest.restoreAllMocks();
   });
+
+  it("records a workspace moving between teams with both team ids", async () => {
+    await EventLogs.logEvent(
+      "workspace_team_changed",
+      { workspaceId: 7, fromTeamId: 2, toTeamId: 3 },
+      1
+    );
+    const row = await prisma.audit_events.findFirst();
+    expect(row).toMatchObject({
+      action: "workspace.updated",
+      workspace_id: 7,
+      team_id: 3,
+      target_id: "7",
+    });
+    expect(JSON.parse(row.metadata)).toEqual({
+      changedFields: ["team_id"],
+      changes: { team_id: { from: 2, to: 3 } },
+    });
+  });
 });
 
 describe("EventLogs readers", () => {

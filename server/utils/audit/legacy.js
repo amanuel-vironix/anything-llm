@@ -265,10 +265,35 @@ const LEGACY_EVENT_MAP = {
       }),
     ])
   ),
+  // endpoints/teams.js: {teamId, workspaceId, workspaceName}
   team_workspace_created: (m) => ({
     action: "workspace.created",
     teamId: m.teamId,
+    workspaceId: m.workspaceId,
+    targetType: "workspace",
+    targetId: m.workspaceId,
     metadata: { workspaceName: m.workspaceName, slug: m.slug },
+  }),
+  // A team lead's edit: {teamId, workspaceId, changedFields}
+  team_workspace_updated: (m) => ({
+    action: "workspace.updated",
+    teamId: m.teamId,
+    workspaceId: m.workspaceId,
+    targetType: "workspace",
+    targetId: m.workspaceId,
+    metadata: { changedFields: m.changedFields },
+  }),
+  // A workspace moved between teams: {workspaceId, fromTeamId, toTeamId}
+  workspace_team_changed: (m) => ({
+    action: "workspace.updated",
+    teamId: m.toTeamId,
+    workspaceId: m.workspaceId,
+    targetType: "workspace",
+    targetId: m.workspaceId,
+    metadata: {
+      changedFields: ["team_id"],
+      changes: { team_id: { from: m.fromTeamId, to: m.toTeamId } },
+    },
   }),
   model_router_deleted: (m) => ({
     action: "router.deleted",
