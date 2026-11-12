@@ -403,7 +403,7 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AUTH-58](01-auth-and-users.md) | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | P-AUTH-37 | `server/endpoints/auth/oidc.js:87,112-122,131` |  | email stored in `event_logs` |
 | [SE-AUTH-61](01-auth-and-users.md) | LOG | `oidc_settings_updated` | P-AUTH-38 | `server/endpoints/auth/oidc.js:166` |  |  |
 | [SE-AUTH-62](01-auth-and-users.md) | LOG | `failed_login_password_disabled` | P-AUTH-06 | `server/endpoints/system.js:292` |  |  |
-| [SE-AUTH-63](01-auth-and-users.md) | LOG | `password_reset` (username only) | P-AUTH-22 | `server/utils/PasswordRecovery/index.js:122` |  | was `user_updated` before this branch |
+| [SE-AUTH-63](01-auth-and-users.md) | LOG | none from the helper: `resetPassword` no longer logs; the route records SE-AUTH-66 | P-AUTH-22 | `server/utils/PasswordRecovery/index.js` |  | removed at the audit merge, where it wrote a second `auth.password_reset` row |
 | [SE-AUTH-64](01-auth-and-users.md) | LOG | `audit_events: auth.password_changed` (outcome `success` / `failed` / `denied`; denied in multi-user mode; `password_disabled` noted in `reason`) | P-AUTH-02/03 | `server/endpoints/system.js:732,759,785` |  | recorded with `recordOrFail`: the request ends 500 if the row can't be stored or queued |
 | [SE-AUTH-65](01-auth-and-users.md) | LOG | `audit_events: auth.recovery_used` (no username or codes stored) | P-AUTH-21 | `server/endpoints/system.js:425` |  |  |
 | [SE-AUTH-66](01-auth-and-users.md) | LOG | `audit_events: auth.password_reset` (success, failed) | P-AUTH-22 | `server/endpoints/system.js:483,498` |  |  |

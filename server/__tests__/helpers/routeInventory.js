@@ -40,6 +40,7 @@ const REGISTRARS = [
   ["endpoints/memory", "memoryEndpoints"],
   ["endpoints/embed", "embeddedEndpoints"],
   ["endpoints/browserExtension", "browserExtensionEndpoints"],
+  ["endpoints/auth/oidc", "oidcEndpoints"],
 ];
 
 function recorder(routes, source) {

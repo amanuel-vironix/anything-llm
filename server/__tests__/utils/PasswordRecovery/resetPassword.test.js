@@ -45,7 +45,7 @@ async function state(userId) {
 }
 
 beforeEach(async () => {
-  await prisma.event_logs.deleteMany({});
+  await prisma.audit_events.deleteMany({});
   await prisma.users.deleteMany({});
 });
 
@@ -65,8 +65,9 @@ describe("resetPassword", () => {
     expect(after.user.seen_recovery_codes).toBe(false);
     expect(after.tokens).toBe(0);
     expect(after.codes).toBe(0);
-    const events = await prisma.event_logs.findMany({ where: { userId: user.id } });
-    expect(events.map((e) => e.event)).toEqual(["password_reset"]);
+    // POST /system/reset-password records auth.password_reset; the helper
+    // itself writes no audit row, so a reset is never recorded twice.
+    expect(await prisma.audit_events.count()).toBe(0);
   });
 
   it("leaves seen_recovery_codes, the codes and the token alone when the new password is rejected", async () => {

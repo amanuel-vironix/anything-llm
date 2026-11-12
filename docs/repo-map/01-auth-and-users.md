@@ -451,7 +451,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   4. One transaction (`server/utils/PasswordRecovery/index.js:102-115`): consume the token with a conditional `deleteMany` (by id, `expiresAt >= now`, count must be 1), set the new password and `seen_recovery_codes=false`, then delete the user's other reset tokens and recovery codes.
   5. Log `password_reset` with the username (no password).
 - **State changes:** `users.password: old → new`. `users.seen_recovery_codes: true → false`. `password_reset_tokens` and `recovery_codes`: rows deleted.
-- **Side effects:** SE-AUTH-40 (DB), SE-AUTH-63 (LOG `password_reset`).
+- **Side effects:** SE-AUTH-40 (DB), SE-AUTH-66 (LOG `auth.password_reset`, recorded by the route).
 - **Failure and edge paths:**
   - Empty or mismatched passwords throw, so the endpoint returns **500** with the message (`server/endpoints/system.js:445-447`), not 400.
   - A rejected password (complexity) leaves the token, the recovery codes and `seen_recovery_codes` untouched. Two concurrent resets with one token: only one succeeds (F-10 / SMF-15, fixed in `169b68a0`; `server/__tests__/utils/PasswordRecovery/resetPassword.test.js`). Recovery is still unlogged and not rate limited (F-08).
@@ -730,7 +730,7 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 | SE-AUTH-60 | P-AUTH-38 | CACHE | OIDC client cache reset | `server/utils/auth/oidc.js:47` | | |
 | SE-AUTH-61 | P-AUTH-38 | LOG | `oidc_settings_updated` | `server/endpoints/auth/oidc.js:166` | | |
 | SE-AUTH-62 | P-AUTH-06 | LOG | `failed_login_password_disabled` | `server/endpoints/system.js:292` | | |
-| SE-AUTH-63 | P-AUTH-22 | LOG | `password_reset` (username only) | `server/utils/PasswordRecovery/index.js:122` | | was `user_updated` before this branch |
+| SE-AUTH-63 | P-AUTH-22 | LOG | none from the helper: `resetPassword` no longer logs; the route records SE-AUTH-66 | `server/utils/PasswordRecovery/index.js` | | removed at the audit merge, where it wrote a second `auth.password_reset` row |
 | SE-AUTH-64 | P-AUTH-02/03 | LOG | `audit_events: auth.password_changed` (outcome `success` / `failed` / `denied`; denied in multi-user mode; `password_disabled` noted in `reason`) | `server/endpoints/system.js:732,759,785` | | recorded with `recordOrFail`: the request ends 500 if the row can't be stored or queued |
 | SE-AUTH-65 | P-AUTH-21 | LOG | `audit_events: auth.recovery_used` (no username or codes stored) | `server/endpoints/system.js:425` | | |
 | SE-AUTH-66 | P-AUTH-22 | LOG | `audit_events: auth.password_reset` (success, failed) | `server/endpoints/system.js:483,498` | | |

@@ -6,7 +6,6 @@ const {
   PasswordResetToken,
 } = require("../../models/passwordRecovery");
 const { dummyHashCompare } = require("../helpers/dummyHashCompare");
-const { EventLogs } = require("../../models/eventLogs");
 const prisma = require("../prisma");
 
 async function generateRecoveryCodes(userId) {
@@ -97,35 +96,28 @@ async function resetPassword(token, _newPassword = "", confirmPassword = "") {
   // same transaction: two resets with one token cannot both succeed, and a
   // failure part-way leaves nothing half-applied.
   const userId = resetToken.user_id;
-  let user;
   try {
-    user = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       const { count } = await tx.password_reset_tokens.deleteMany({
         where: { id: resetToken.id, expiresAt: { gte: new Date() } },
       });
       if (count !== 1) throw new Error("Invalid reset token");
 
-      const user = await tx.users.update({
+      await tx.users.update({
         where: { id: userId },
         // New codes are provided on first new login.
         data: { password: passwordHash, seen_recovery_codes: false },
       });
       await tx.password_reset_tokens.deleteMany({ where: { user_id: userId } });
       await tx.recovery_codes.deleteMany({ where: { user_id: userId } });
-      return user;
     });
   } catch (error) {
     console.error("FAILED TO RESET PASSWORD.", error.message);
     return { success: false, message: "Invalid reset token" };
   }
 
-  // Its own event, so the audit log can tell a reset with recovery codes
-  // from an admin edit (the audit branch maps it to auth.password_reset).
-  await EventLogs.logEvent(
-    "password_reset",
-    { username: user.username },
-    userId
-  );
+  // The caller, POST /system/reset-password, records auth.password_reset
+  // (success or failed) with the request context, so nothing is logged here.
   return { success: true, message: "Password reset successful" };
 }
 

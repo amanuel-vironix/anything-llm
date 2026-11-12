@@ -96,10 +96,10 @@ const makeKey = (data = {}) =>
   });
 
 /** Refusal events are written without blocking the request; wait for the row. */
-async function waitForEvent(event) {
+async function waitForEvent(action) {
   for (let i = 0; i < 50; i++) {
-    const row = await prisma.event_logs.findFirst({
-      where: { event },
+    const row = await prisma.audit_events.findFirst({
+      where: { action },
       orderBy: { id: "desc" },
     });
     if (row) return row;
@@ -135,7 +135,12 @@ describe("validApiKey", () => {
     const res = await call("GET", "/v1/auth", key);
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/expired/);
-    const logged = await waitForEvent("api_key_expired_refused");
+    const logged = await waitForEvent("api_key.expired_rejected");
+    expect(logged).toMatchObject({
+      outcome: "denied",
+      actor_type: "api_key",
+      actor_id: String(key.id),
+    });
     expect(JSON.parse(logged.metadata).keyId).toBe(key.id);
   });
 
@@ -151,11 +156,13 @@ describe("validApiKey", () => {
     const key = await makeKey();
     const res = await call("GET", "/v1/auth", key);
     expect(res.status).toBe(403);
-    const logged = await prisma.event_logs.findFirst({
-      where: { event: "legacy_api_key_refused" },
-      orderBy: { id: "desc" },
+    const logged = await waitForEvent("access.denied");
+    expect(logged).toMatchObject({
+      outcome: "denied",
+      reason: "key_scope",
+      actor_type: "api_key",
+      actor_id: String(key.id),
     });
-    expect(JSON.parse(logged.metadata).apiKeyId).toBe(key.id);
   });
 
   it("accepts a legacy key in single-user mode", async () => {

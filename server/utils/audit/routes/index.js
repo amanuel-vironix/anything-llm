@@ -28,6 +28,7 @@ const FRAGMENTS = [
   require("./developerApi"),
   require("./channels"),
   require("./agents"),
+  require("./accessAndSignIn"),
 ];
 
 // Files another branch is editing (docs/merge-coordination.md), by owner.

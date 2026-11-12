@@ -15,8 +15,10 @@ module.exports = {
       "login_event",
     ],
   },
+  // The handler calls swapTemporaryToken, a helper in the same file (GS).
   "GET /request-token/sso/simple": {
     legacy: ["failed_login_invalid_temporary_auth_token", "login_event"],
+    in: ["endpoints/system.js"],
   },
   "POST /system/local-files/by-docpaths": {
     exempt:
