@@ -1,59 +1,98 @@
 const prisma = require("../utils/prisma");
 
+/**
+ * Shapes an `audit_events` row like the old `event_logs` row the Event Logs
+ * page renders, with the new columns folded into its metadata.
+ */
+function asLegacyRow(row) {
+  let metadata = {};
+  try {
+    metadata = row.metadata ? JSON.parse(row.metadata) : {};
+  } catch {
+    metadata = {};
+  }
+  const details = {
+    ...metadata,
+    outcome: row.outcome,
+    ...(row.reason ? { reason: row.reason } : {}),
+    actor: `${row.actor_type}${row.actor_id ? `:${row.actor_id}` : ""}`,
+    channel: row.channel,
+    ...(row.target_type
+      ? {
+          target: `${row.target_type}${row.target_id ? `:${row.target_id}` : ""}`,
+        }
+      : {}),
+    ...(row.ip ? { ip: row.ip } : {}),
+  };
+  return {
+    id: row.id,
+    event: row.action,
+    metadata: JSON.stringify(details),
+    userId:
+      row.actor_type === "user" && row.actor_id
+        ? Number(row.actor_id)
+        : row.on_behalf_of,
+    occurredAt: row.occurred_at,
+  };
+}
+
+/** Maps old `event_logs` filters and ordering to `audit_events` columns. */
+function toAuditClause(clause = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(clause || {})) {
+    if (key === "event") out.action = value;
+    else if (key === "userId") out.on_behalf_of = value;
+    else if (key === "occurredAt") out.occurred_at = value;
+    else out[key] = value;
+  }
+  return out;
+}
+
+function toAuditOrder(orderBy) {
+  if (!orderBy) return { occurred_at: "desc" };
+  return toAuditClause(orderBy);
+}
+
 const EventLogs = {
+  /**
+   * Deprecated: call `audit.record` from `server/utils/audit` with a
+   * catalogue action. Kept as a thin wrapper until every caller has moved.
+   * Legacy callers aren't written to fail closed, so a failed write is
+   * reported in the return value rather than thrown.
+   */
   logEvent: async function (event, metadata = {}, userId = null) {
+    const { audit } = require("../utils/audit");
+    const { mapLegacyEvent } = require("../utils/audit/legacy");
+    const events = mapLegacyEvent(event, metadata, userId);
+    if (events.length === 0) {
+      console.error(`[audit] unmapped legacy event: ${event}`);
+      return { eventLog: null, message: `Unmapped legacy event ${event}` };
+    }
     try {
-      const eventLog = await prisma.event_logs.create({
-        data: {
-          event,
-          metadata: metadata ? JSON.stringify(metadata) : null,
-          userId: userId ? Number(userId) : null,
-          occurredAt: new Date(),
-        },
-      });
-      console.log(`\x1b[32m[Event Logged]\x1b[0m - ${event}`);
+      let eventLog = null;
+      for (const auditEvent of events) {
+        const row = await audit.record(auditEvent);
+        if (!eventLog) eventLog = row;
+      }
       return { eventLog, message: null };
     } catch (error) {
-      console.error(
-        `\x1b[31m[Event Logging Failed]\x1b[0m - ${event}`,
-        error.message
-      );
+      console.error(`[audit] logging failed for ${event}: ${error.message}`);
       return { eventLog: null, message: error.message };
     }
   },
 
   getByEvent: async function (event, limit = null, orderBy = null) {
-    try {
-      const logs = await prisma.event_logs.findMany({
-        where: { event },
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null
-          ? { orderBy }
-          : { orderBy: { occurredAt: "desc" } }),
-      });
-      return logs;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+    return this.where({ event }, limit, orderBy);
   },
 
   getByUserId: async function (userId, limit = null, orderBy = null) {
-    try {
-      const logs = await prisma.event_logs.findMany({
-        where: { userId },
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null
-          ? { orderBy }
-          : { orderBy: { occurredAt: "desc" } }),
-      });
-      return logs;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+    return this.where({ userId }, limit, orderBy);
   },
 
+  /**
+   * Reads `audit_events` (which also holds the copied `event_logs` rows) in
+   * the old row shape. Filters use the old field names.
+   */
   where: async function (
     clause = {},
     limit = null,
@@ -61,15 +100,13 @@ const EventLogs = {
     offset = null
   ) {
     try {
-      const logs = await prisma.event_logs.findMany({
-        where: clause,
+      const rows = await prisma.audit_events.findMany({
+        where: toAuditClause(clause),
         ...(limit !== null ? { take: limit } : {}),
         ...(offset !== null ? { skip: offset } : {}),
-        ...(orderBy !== null
-          ? { orderBy }
-          : { orderBy: { occurredAt: "desc" } }),
+        orderBy: toAuditOrder(orderBy),
       });
-      return logs;
+      return rows.map(asLegacyRow);
     } catch (error) {
       console.error(error.message);
       return [];
@@ -101,16 +138,17 @@ const EventLogs = {
 
   count: async function (clause = {}) {
     try {
-      const count = await prisma.event_logs.count({
-        where: clause,
-      });
-      return count;
+      return await prisma.audit_events.count({ where: toAuditClause(clause) });
     } catch (error) {
       console.error(error.message);
       return 0;
     }
   },
 
+  /**
+   * Deletes legacy `event_logs` rows only. Audit rows can't be deleted through
+   * the app; PR B removes this and the route that calls it (F-54).
+   */
   delete: async function (clause = {}) {
     try {
       await prisma.event_logs.deleteMany({
