@@ -1,6 +1,7 @@
 const { AgentSkillWhitelist } = require("../models/agentSkillWhitelist");
 const { reqBody, userFromSession } = require("../utils/http");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
+const { audit } = require("../utils/audit");
 const {
   flexUserRoleValid,
   ROLES,
@@ -87,6 +88,19 @@ function agentSkillWhitelistEndpoints(app) {
           skillName,
           userId
         );
+        if (
+          success &&
+          !(await audit.recordOrFail(
+            {
+              action: "agent.whitelist_added",
+              targetType: "agent_skill",
+              targetId: skillName,
+              metadata: { tool: skillName },
+            },
+            response
+          ))
+        )
+          return;
         return response.status(success ? 200 : 400).json({ success, error });
       } catch (e) {
         console.error(e);

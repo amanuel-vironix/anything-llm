@@ -5,6 +5,7 @@ const {
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
+const { audit } = require("../utils/audit");
 
 function mcpServersEndpoints(app) {
   if (!app) return;
@@ -58,9 +59,25 @@ function mcpServersEndpoints(app) {
     async (request, response) => {
       try {
         const { name } = reqBody(request);
-        const result = await new MCPCompatibilityLayer().toggleServerStatus(
-          name
-        );
+        const mcp = new MCPCompatibilityLayer();
+        const result = await mcp.toggleServerStatus(name);
+        if (result.success) {
+          // MCPCompatibilityLayer is a singleton: after a successful toggle the
+          // server is in `mcps` only if it was started.
+          const started = Boolean(mcp.mcps?.[name]);
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: started ? "mcp.server_started" : "mcp.server_stopped",
+                targetType: "mcp_server",
+                targetId: name,
+                metadata: { server: name },
+              },
+              response
+            ))
+          )
+            return;
+        }
         return response.status(200).json({
           success: result.success,
           error: result.error,
@@ -82,6 +99,20 @@ function mcpServersEndpoints(app) {
       try {
         const { name } = reqBody(request);
         const result = await new MCPCompatibilityLayer().deleteServer(name);
+        if (result.success) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "mcp.server_removed",
+                targetType: "mcp_server",
+                targetId: name,
+                metadata: { server: name },
+              },
+              response
+            ))
+          )
+            return;
+        }
         return response.status(200).json({
           success: result.success,
           error: result.error,
@@ -107,6 +138,24 @@ function mcpServersEndpoints(app) {
           toolName,
           enabled
         );
+        if (result.success) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "mcp.tool_toggled",
+                targetType: "mcp_server",
+                targetId: serverName,
+                metadata: {
+                  server: serverName,
+                  tool: toolName,
+                  enabled: Boolean(enabled),
+                },
+              },
+              response
+            ))
+          )
+            return;
+        }
         return response.status(200).json({
           success: result.success,
           error: result.error,

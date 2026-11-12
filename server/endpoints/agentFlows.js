@@ -5,6 +5,7 @@ const {
 } = require("../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
 const { Telemetry } = require("../models/telemetry");
+const { audit } = require("../utils/audit");
 
 function agentFlowEndpoints(app) {
   if (!app) return;
@@ -35,6 +36,23 @@ function agentFlowEndpoints(app) {
             blockCount: config.blocks?.length || 0,
           });
         }
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: uuid ? "flow.updated" : "flow.created",
+              targetType: "flow",
+              targetId: flow.uuid,
+              metadata: {
+                flowUuid: flow.uuid,
+                name,
+                ...(uuid ? { active: config.active } : {}),
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         return response.status(200).json({
           success: true,
@@ -150,6 +168,19 @@ function agentFlowEndpoints(app) {
           });
         }
 
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "flow.deleted",
+              targetType: "flow",
+              targetId: uuid,
+              metadata: { flowUuid: uuid },
+            },
+            response
+          ))
+        )
+          return;
+
         return response.status(200).json({
           success,
         });
@@ -187,6 +218,23 @@ function agentFlowEndpoints(app) {
             .status(500)
             .json({ success: false, error: "Failed to update flow" });
         }
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "flow.updated",
+              targetType: "flow",
+              targetId: uuid,
+              metadata: {
+                flowUuid: uuid,
+                name: flow.name,
+                active: Boolean(active),
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         return response.json({ success: true, flow });
       } catch (error) {

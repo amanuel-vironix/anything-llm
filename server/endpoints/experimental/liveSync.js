@@ -1,6 +1,6 @@
 const { DocumentSyncQueue } = require("../../models/documentSyncQueue");
 const { Document } = require("../../models/documents");
-const { EventLogs } = require("../../models/eventLogs");
+const { audit } = require("../../utils/audit");
 const { SystemSettings } = require("../../models/systemSettings");
 const { Telemetry } = require("../../models/telemetry");
 const { reqBody } = require("../../utils/http");
@@ -41,13 +41,26 @@ function liveSyncEndpoints(app) {
           await Telemetry.sendTelemetry("experimental_feature_enabled", {
             feature: "live_file_sync",
           });
-          await EventLogs.logEvent("experimental_feature_enabled", {
-            feature: "live_file_sync",
-          });
           DocumentSyncQueue.bootWorkers();
         } else {
           DocumentSyncQueue.killWorkers();
         }
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "feature.toggled",
+              targetType: "feature",
+              targetId: "live_file_sync",
+              metadata: {
+                feature: "live_file_sync",
+                enabled: newStatus === "enabled",
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         response.status(200).json({ liveSyncEnabled: newStatus === "enabled" });
       } catch (e) {
@@ -102,6 +115,20 @@ function liveSyncEndpoints(app) {
         if (!document) return response.sendStatus(404).end();
 
         await DocumentSyncQueue.toggleWatchStatus(document, watchStatus);
+        await audit.record(
+          {
+            action: "document.watched",
+            targetType: "document",
+            targetId: document.id,
+            workspaceId: workspace.id,
+            metadata: {
+              docName: document.filename,
+              workspaceSlug: workspace.slug,
+              watched: Boolean(watchStatus),
+            },
+          },
+          { response }
+        );
         return response.status(200).end();
       } catch (error) {
         console.error("Error processing the watch status update:", error);

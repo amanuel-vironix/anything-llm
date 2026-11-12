@@ -7,6 +7,7 @@ const {
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
 const { validWorkspaceSlug } = require("../utils/middleware/validWorkspace");
+const { audit } = require("../utils/audit");
 
 async function memoryFeatureEnabled(_req, response, next) {
   const enabled = await SystemSettings.memoriesEnabled();
@@ -89,6 +90,20 @@ function memoryEndpoints(app) {
         });
 
         if (!memory) return response.status(400).json({ error: message });
+        await audit.record(
+          {
+            action: "memory.created",
+            targetType: "memory",
+            targetId: memory.id,
+            workspaceId: workspace.id,
+            metadata: {
+              memoryId: memory.id,
+              scope: memory.scope ?? scope,
+              workspaceId: memory.workspaceId ?? null,
+            },
+          },
+          { response }
+        );
         response.status(200).json({ memory });
       } catch (e) {
         console.error(e);
@@ -114,6 +129,15 @@ function memoryEndpoints(app) {
         });
 
         if (!memory) return response.status(400).json({ error: message });
+        await audit.record(
+          {
+            action: "memory.updated",
+            targetType: "memory",
+            targetId: memory.id,
+            metadata: { memoryId: memory.id, scope: memory.scope },
+          },
+          { response }
+        );
         response.status(200).json({ memory });
       } catch (e) {
         console.error(e);
@@ -133,7 +157,17 @@ function memoryEndpoints(app) {
     async (request, response) => {
       try {
         const memoryId = Number(request.params.memoryId);
+        const existing = await Memory.get({ id: memoryId });
         await Memory.delete(memoryId);
+        await audit.record(
+          {
+            action: "memory.deleted",
+            targetType: "memory",
+            targetId: memoryId,
+            metadata: { memoryId, scope: existing?.scope },
+          },
+          { response }
+        );
         response.status(200).json({ success: true });
       } catch (e) {
         console.error(e);
@@ -156,6 +190,15 @@ function memoryEndpoints(app) {
         const { memory, message } = await Memory.promoteToGlobal(memoryId);
         if (!memory) return response.status(400).json({ error: message });
 
+        await audit.record(
+          {
+            action: "memory.updated",
+            targetType: "memory",
+            targetId: memory.id,
+            metadata: { memoryId: memory.id, scope: memory.scope ?? "global" },
+          },
+          { response }
+        );
         response.status(200).json({ memory });
       } catch (e) {
         console.error(e);
@@ -184,6 +227,19 @@ function memoryEndpoints(app) {
         );
 
         if (!memory) return response.status(400).json({ error: message });
+        await audit.record(
+          {
+            action: "memory.updated",
+            targetType: "memory",
+            targetId: memory.id,
+            workspaceId: targetWorkspace.id,
+            metadata: {
+              memoryId: memory.id,
+              scope: memory.scope ?? "workspace",
+            },
+          },
+          { response }
+        );
         response.status(200).json({ memory });
       } catch (e) {
         console.error(e);
