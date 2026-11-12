@@ -11,31 +11,47 @@ const TemporaryAuthToken = {
   tablename: "temporary_auth_tokens",
   writable: [],
 
-  makeTempToken: () => {
+  /** Prefix of tokens minted through the developer API (Simple SSO). */
+  simpleSSOPrefix: "allm-tat-",
+  /** Prefix of tokens minted by the Google (OIDC) sign-in callback. */
+  oidcPrefix: "allm-oidc-",
+
+  makeTempToken: (prefix = "allm-tat-") => {
     const uuidAPIKey = require("uuid-apikey");
-    return `allm-tat-${uuidAPIKey.create().apiKey}`;
+    return `${prefix}${uuidAPIKey.create().apiKey}`;
   },
 
   /**
-   * Issues a temporary auth token for a user via its ID.
+   * Issues a temporary auth token for a user via its ID, replacing any
+   * earlier ones. The delete and the create run in one transaction, so two
+   * concurrent issues leave exactly one live token (SMF-32).
    * @param {number} userId
+   * @param {{prefix?: string}} options - `oidcPrefix` marks a token minted by
+   *   Google sign-in, which the swap endpoint accepts without Simple SSO.
    * @returns {Promise<{token: string|null, error: string | null}>}
    */
-  issue: async function (userId = null) {
+  issue: async function (
+    userId = null,
+    { prefix = this.simpleSSOPrefix } = {}
+  ) {
     if (!userId)
       throw new Error("User ID is required to issue a temporary auth token.");
-    await this.invalidateUserTokens(userId);
 
     try {
-      const token = this.makeTempToken();
+      const token = this.makeTempToken(prefix);
       const expiresAt = new Date(Date.now() + this.expiry);
-      await prisma.temporary_auth_tokens.create({
-        data: {
-          token,
-          expiresAt,
-          userId: Number(userId),
-        },
-      });
+      await prisma.$transaction([
+        prisma.temporary_auth_tokens.deleteMany({
+          where: { userId: Number(userId) },
+        }),
+        prisma.temporary_auth_tokens.create({
+          data: {
+            token,
+            expiresAt,
+            userId: Number(userId),
+          },
+        }),
+      ]);
 
       return { token, error: null };
     } catch (error) {
@@ -80,6 +96,16 @@ const TemporaryAuthToken = {
         include: { user: true },
       });
       if (!token) throw new Error("Invalid token.");
+
+      // Consume the token before checking or issuing anything. deleteMany is
+      // a single conditional write, so when the same token is presented twice
+      // at once only one caller removes the row and only that caller may get
+      // a session. The other sees count 0 and is treated as an invalid token.
+      const { count } = await prisma.temporary_auth_tokens.deleteMany({
+        where: { id: token.id },
+      });
+      if (count === 0) throw new Error("Invalid token.");
+
       if (token.expiresAt < new Date()) throw new Error("Token expired.");
       if (token.user.suspended) throw new Error("User account suspended.");
 
@@ -93,10 +119,6 @@ const TemporaryAuthToken = {
     } catch (error) {
       console.error("FAILED TO VALIDATE TEMPORARY AUTH TOKEN.", error.message);
       return { sessionToken: null, token: null, error: error.message };
-    } finally {
-      // Delete the token after it has been used under all circumstances if it was retrieved
-      if (token)
-        await prisma.temporary_auth_tokens.delete({ where: { id: token.id } });
     }
   },
 };

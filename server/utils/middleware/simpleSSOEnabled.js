@@ -35,6 +35,41 @@ async function simpleSSOEnabled(_, response, next) {
 }
 
 /**
+ * Whether a temporary auth token was minted by Google (OIDC) sign-in rather
+ * than through the developer API.
+ * @param {unknown} token
+ * @returns {boolean}
+ */
+function isOidcLoginToken(token) {
+  const { TemporaryAuthToken } = require("../../models/temporaryAuthToken");
+  return (
+    typeof token === "string" && token.startsWith(TemporaryAuthToken.oidcPrefix)
+  );
+}
+
+/**
+ * Guards the temporary-token swap (`/request-token/sso/simple`). Tokens from
+ * Google sign-in need Google sign-in enabled (and multi-user mode); every
+ * other token needs Simple SSO, as before. So enabling Google sign-in does
+ * not open the swap to tokens minted through the developer API.
+ */
+async function simpleSSOOrOidcToken(request, response, next) {
+  if (!isOidcLoginToken(request.query?.token))
+    return simpleSSOEnabled(request, response, next);
+
+  try {
+    const { getOidcSettings } = require("../auth/oidcSettings");
+    const { enabled } = await getOidcSettings({ decryptSecret: false });
+    if (!enabled || !(await SystemSettings.isMultiUserMode()))
+      return response.status(403).send("Google sign-in is not enabled.");
+  } catch (error) {
+    console.error("FAILED TO CHECK GOOGLE SIGN-IN SETTINGS.", error.message);
+    return response.sendStatus(500).end();
+  }
+  next();
+}
+
+/**
  * Checks if simple SSO login is disabled by checking if the
  * SIMPLE_SSO_NO_LOGIN environment variable is set as well as
  * SIMPLE_SSO_ENABLED is set.
@@ -79,6 +114,8 @@ async function simpleSSOLoginDisabledMiddleware(_, response, next) {
 
 module.exports = {
   simpleSSOEnabled,
+  simpleSSOOrOidcToken,
+  isOidcLoginToken,
   simpleSSOLoginDisabled,
   simpleSSOLoginDisabledMiddleware,
 };

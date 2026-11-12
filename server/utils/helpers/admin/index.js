@@ -17,19 +17,28 @@ function validRoleSelection(currentUser = {}, newUserParams = {}) {
   return { valid: false, error: "Invalid condition for caller." };
 }
 
-// Check to make sure with this update that includes a role change to an existing admin to a non-admin
-// that we still have at least one admin left or else they will lock themselves out.
+// Early, friendly check that demoting or suspending an active admin leaves at
+// least one other active admin. It is a read before the write, so it is not the
+// guarantee: User.update repeats the check inside the write's transaction
+// (SMF-13). This only gives the common case a clear message.
 async function canModifyAdmin(userToModify, updates) {
-  // if updates don't include role property
-  // or the user being modified isn't an admin currently
-  // or the updates role is equal to the users current role.
-  // skip validation.
-  if (!updates.hasOwnProperty("role")) return { valid: true, error: null };
-  if (userToModify.role !== ROLES.admin) return { valid: true, error: null };
-  if (updates.role === userToModify.role) return { valid: true, error: null };
+  if (!userToModify) return { valid: false, error: "User not found." };
+  const castUpdates = {};
+  if (updates.hasOwnProperty("role")) castUpdates.role = updates.role;
+  if (updates.hasOwnProperty("suspended"))
+    castUpdates.suspended = User.castColumnValue(
+      "suspended",
+      updates.suspended
+    );
+  if (!User.removesActiveAdmin(userToModify, castUpdates))
+    return { valid: true, error: null };
 
-  const adminCount = await User.count({ role: ROLES.admin });
-  if (adminCount - 1 <= 0)
+  const otherActiveAdmins = await User.count({
+    role: ROLES.admin,
+    suspended: 0,
+    id: { not: Number(userToModify.id) },
+  });
+  if (otherActiveAdmins <= 0)
     return {
       valid: false,
       error: "No system admins will remain if you do this. Update failed.",

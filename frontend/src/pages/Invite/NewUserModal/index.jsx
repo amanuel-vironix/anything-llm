@@ -17,6 +17,7 @@ import {
   ModalPrimaryButton,
   ModalInput,
 } from "@/components/lib/Modal";
+import GoogleSignInButton from "@/components/Modals/Password/GoogleSignInButton";
 
 export default function NewUserModal() {
   const { code } = useParams();
@@ -48,6 +49,7 @@ export default function NewUserModal() {
     <form onSubmit={handleCreate} className="flex flex-col gap-y-5">
       <ModalHeader title="Create a new account" />
       <ModalBody>
+        <GoogleSignInButton inviteCode={code} />
         <ModalInput
           label="Username"
           name="username"

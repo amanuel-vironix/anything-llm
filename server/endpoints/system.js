@@ -69,9 +69,12 @@ const {
   chatHistoryViewable,
 } = require("../utils/middleware/chatHistoryViewable");
 const {
-  simpleSSOEnabled,
+  simpleSSOOrOidcToken,
+  isOidcLoginToken,
   simpleSSOLoginDisabled,
 } = require("../utils/middleware/simpleSSOEnabled");
+const { passwordLoginRestricted } = require("../utils/auth/oidcSettings");
+const { oidcSessionExpiry } = require("../utils/auth/oidc");
 const { TemporaryAuthToken } = require("../models/temporaryAuthToken");
 const { SystemPromptVariables } = require("../models/systemPromptVariables");
 const { isReservedCommand } = require("../utils/chats");
@@ -277,6 +280,32 @@ function systemEndpoints(app) {
           return;
         }
 
+        // With Google sign-in on and password sign-in turned off, passwords
+        // still work for admins, so a Google misconfiguration cannot lock
+        // everyone out. Checked after the password, like suspension, so it
+        // reveals nothing to someone without the right password.
+        if (
+          existingUser.role !== ROLES.admin &&
+          (await passwordLoginRestricted())
+        ) {
+          await EventLogs.logEvent(
+            "failed_login_password_disabled",
+            {
+              ip: request.ip || "Unknown IP",
+              username: existingUser.username,
+            },
+            existingUser.id
+          );
+          response.status(200).json({
+            user: null,
+            valid: false,
+            token: null,
+            message:
+              "[006] Password sign-in is turned off. Sign in with Google instead.",
+          });
+          return;
+        }
+
         await Telemetry.sendTelemetry(
           "login_event",
           { multiUserMode: false },
@@ -359,46 +388,70 @@ function systemEndpoints(app) {
 
   app.get(
     "/request-token/sso/simple",
-    [simpleSSOEnabled],
+    [simpleSSOOrOidcToken],
     async (request, response) => {
-      const { token: tempAuthToken } = request.query;
-      const { sessionToken, token, error } =
-        await TemporaryAuthToken.validate(tempAuthToken);
-
-      if (error) {
-        await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {
-          ip: request.ip || "Unknown IP",
-          multiUserMode: true,
-        });
-        return response.status(401).json({
-          valid: false,
-          token: null,
-          message: `[001] An error occurred while validating the token: ${error}`,
-        });
+      try {
+        await swapTemporaryToken(request, response);
+      } catch (error) {
+        console.error("FAILED TO SWAP TEMPORARY AUTH TOKEN.", error.message);
+        response.sendStatus(500).end();
       }
-
-      await Telemetry.sendTelemetry(
-        "login_event",
-        { multiUserMode: true },
-        token.user.id
-      );
-      await EventLogs.logEvent(
-        "login_event",
-        {
-          ip: request.ip || "Unknown IP",
-          username: token.user.username || "Unknown user",
-        },
-        token.user.id
-      );
-
-      response.status(200).json({
-        valid: true,
-        user: User.filterFields(token.user),
-        token: sessionToken,
-        message: null,
-      });
     }
   );
+
+  /**
+   * Swaps a one-time token (Simple SSO or Google sign-in) for a session.
+   * Called only from the route above, which turns any throw into a 500.
+   */
+  async function swapTemporaryToken(request, response) {
+    const { token: tempAuthToken } = request.query;
+    const fromOidc = isOidcLoginToken(tempAuthToken);
+    const validated = await TemporaryAuthToken.validate(tempAuthToken);
+    const { token, error } = validated;
+    // Sessions started through Google sign-in are shorter
+    // (OIDC_SESSION_EXPIRY, default 12h), so disabling someone's Google
+    // account ends their AnythingLLM access within that time.
+    const sessionToken =
+      fromOidc && !error
+        ? makeJWT(
+            { id: token.user.id, username: token.user.username },
+            oidcSessionExpiry()
+          )
+        : validated.sessionToken;
+
+    if (error) {
+      await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {
+        ip: request.ip || "Unknown IP",
+        multiUserMode: true,
+      });
+      return response.status(401).json({
+        valid: false,
+        token: null,
+        message: `[001] An error occurred while validating the token: ${error}`,
+      });
+    }
+
+    await Telemetry.sendTelemetry(
+      "login_event",
+      { multiUserMode: true },
+      token.user.id
+    );
+    await EventLogs.logEvent(
+      "login_event",
+      {
+        ip: request.ip || "Unknown IP",
+        username: token.user.username || "Unknown user",
+      },
+      token.user.id
+    );
+
+    response.status(200).json({
+      valid: true,
+      user: User.filterFields(token.user),
+      token: sessionToken,
+      message: null,
+    });
+  }
 
   app.post(
     "/system/recover-account",
@@ -713,7 +766,9 @@ function systemEndpoints(app) {
         await EventLogs.logEvent("multi_user_mode_enabled", {}, user?.id);
         response.status(200).json({ success: !!user, error });
       } catch (e) {
-        await User.delete({});
+        // Rolling back to single-user mode removes every user, so the
+        // last-admin guard does not apply here.
+        await User.delete({}, { allowNoActiveAdmin: true });
         await SystemSettings._updateSettings({
           multi_user_mode: false,
         });
