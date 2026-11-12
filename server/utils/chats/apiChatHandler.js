@@ -26,6 +26,24 @@ const {
   sanitizeFileName,
 } = require("../files");
 /**
+ * The error to show when an API key's owner has used up their daily message limit,
+ * or null. Legacy keys (no owner) have no limit.
+ * @param {import("@prisma/client").users|null} user
+ * @returns {Promise<string|null>}
+ */
+async function chatLimitError(user) {
+  if (
+    !user ||
+    user.dailyMessageLimit === null ||
+    user.dailyMessageLimit === undefined
+  )
+    return null;
+  const { User } = require("../../models/user");
+  if (await User.canSendChat(user)) return null;
+  return `You have met your maximum 24 hour chat quota of ${user.dailyMessageLimit} chats. Try again later.`;
+}
+
+/**
  * @typedef ResponseObject
  * @property {string} id - uuid of response
  * @property {string} type - Type of response
@@ -175,6 +193,17 @@ async function chatSync({
       };
     }
   }
+
+  const limitError = await chatLimitError(user);
+  if (limitError)
+    return {
+      id: uuid,
+      type: "abort",
+      textResponse: null,
+      sources: [],
+      close: true,
+      error: limitError,
+    };
 
   // Process slash commands
   // Since preset commands are not supported in API calls, we can just process the message here
@@ -553,6 +582,19 @@ async function streamChat({
       });
       return;
     }
+  }
+
+  const limitError = await chatLimitError(user);
+  if (limitError) {
+    writeResponseChunk(response, {
+      id: uuid,
+      type: "abort",
+      textResponse: null,
+      sources: [],
+      close: true,
+      error: limitError,
+    });
+    return;
   }
 
   // Check for and process slash commands

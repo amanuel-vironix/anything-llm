@@ -1,5 +1,8 @@
 const { Telemetry } = require("../../../models/telemetry");
-const { validApiKey } = require("../../../utils/middleware/validApiKey");
+const {
+  validApiKey,
+  apiKeyWorkspace,
+} = require("../../../utils/middleware/validApiKey");
 const { handleAPIFileUpload } = require("../../../utils/files/multer");
 const {
   findDocumentInDocuments,
@@ -25,13 +28,15 @@ const documentsPath =
     : path.resolve(process.env.STORAGE_DIR, `documents`);
 
 /**
- * Runs a simple validation check on the addToWorkspaces query parameter to ensure it is a string of comma-separated workspace slugs.
+ * Checks the addToWorkspaces parameter: a string of comma-separated workspace slugs,
+ * each one a workspace the API key may reach (its owner's workspaces narrowed by the
+ * key's workspace scope). Any other slug refuses the whole request.
  * @param {*} request
  * @param {*} response
  * @param {*} next
  * @returns
  */
-function validateWorkspaceSlugQuery(request, response, next) {
+async function validateWorkspaceSlugQuery(request, response, next) {
   const { addToWorkspaces = "" } = reqBody(request);
   if (!addToWorkspaces) return next();
   if (typeof addToWorkspaces !== "string") {
@@ -42,6 +47,26 @@ function validateWorkspaceSlugQuery(request, response, next) {
         error: `addToWorkspaces must be a string of comma-separated workspace slugs. Got ${typeof addToWorkspaces}`,
       })
       .end();
+  }
+  const slugs = addToWorkspaces
+    .split(",")
+    .map((slug) => String(slug).trim().toLowerCase())
+    .filter(Boolean);
+  try {
+    for (const slug of slugs) {
+      if (!(await apiKeyWorkspace(response, { slug }))) {
+        return response
+          .status(403)
+          .json({
+            success: false,
+            error: `This API key can't add documents to workspace "${slug}".`,
+          })
+          .end();
+      }
+    }
+  } catch (e) {
+    console.error(e.message, e);
+    return response.sendStatus(500).end();
   }
   next();
 }

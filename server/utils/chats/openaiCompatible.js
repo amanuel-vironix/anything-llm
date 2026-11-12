@@ -51,6 +51,7 @@ function historyAsChatRecords(history = []) {
 
 async function chatSync({
   workspace,
+  user = null,
   systemPrompt = null,
   history = [],
   prompt = null,
@@ -63,6 +64,7 @@ async function chatSync({
   const { connector: LLMConnector, routingMetadata } =
     await resolveProviderConnector({
       workspace,
+      user,
       prompt,
       attachments,
       temperature,
@@ -88,6 +90,7 @@ async function chatSync({
 
     await WorkspaceChats.new({
       workspaceId: workspace.id,
+      user,
       prompt: String(prompt),
       response: {
         text: textResponse,
@@ -181,6 +184,7 @@ async function chatSync({
 
     await WorkspaceChats.new({
       workspaceId: workspace.id,
+      user,
       prompt: String(prompt),
       response: {
         text: textResponse,
@@ -242,6 +246,7 @@ async function chatSync({
 
   const { chat } = await WorkspaceChats.new({
     workspaceId: workspace.id,
+    user,
     prompt: String(prompt),
     response: {
       text: textResponse,
@@ -268,6 +273,7 @@ async function chatSync({
 
 async function streamChat({
   workspace,
+  user = null,
   response,
   systemPrompt = null,
   history = [],
@@ -281,6 +287,7 @@ async function streamChat({
   const { connector: LLMConnector, routingMetadata } =
     await resolveProviderConnector({
       workspace,
+      user,
       prompt,
       attachments,
       temperature,
@@ -329,6 +336,7 @@ async function streamChat({
 
     await WorkspaceChats.new({
       workspaceId: workspace.id,
+      user,
       prompt: String(prompt),
       response: {
         text: textResponse,
@@ -430,6 +438,7 @@ async function streamChat({
 
     await WorkspaceChats.new({
       workspaceId: workspace.id,
+      user,
       prompt: String(prompt),
       response: {
         text: textResponse,
@@ -510,6 +519,7 @@ async function streamChat({
   if (completeText?.length > 0) {
     const { chat } = await WorkspaceChats.new({
       workspaceId: workspace.id,
+      user,
       prompt: String(prompt),
       response: {
         text: completeText,

@@ -334,7 +334,7 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
   gets `[006]` from `/request-token`.
 - **Google sign-in**: when `/setup-complete` reports `OidcEnabled`, the form shows **Sign in with
   Google** (`components/Modals/Password/GoogleSignInButton.jsx`, rendered at
-  `MultiUserAuth.jsx:336`): a full-page link to `${API_BASE}/auth/oidc/start` (P-AUTH-31). A refused
+  `MultiUserAuth.jsx:336`): a full-page link to `${API_BASE}/auth/oidc/start` (P-AUTH-36). A refused
   sign-in returns to `/login?sso_error=<reason>`, and the button shows a fixed message for that
   reason (no server text is rendered). On success the server redirects to `/sso/simple?token=`
   (P-UI-06).
@@ -355,7 +355,7 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
 ### P-UI-06 Simple SSO passthrough
 
 - **Actor and preconditions**: Simple SSO enabled with a token issued through the developer API, or
-  Google sign-in enabled with a token issued by the OIDC callback (P-AUTH-32).
+  Google sign-in enabled with a token issued by the OIDC callback (P-AUTH-37).
 - **Steps**: `/sso/simple?token=…&redirectTo=…` (`pages/Login/SSO/simple.jsx`): clear auth keys,
   `GET /request-token/sso/simple?token=` (`models/system.js:811-812`) → `simpleSSOOrOidcToken`
   (`server/endpoints/system.js:391`); store user, token and timestamp;
@@ -379,7 +379,7 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
 - **Side effects**: SE-UI-04, SE-UI-05.
 - **Google sign-in**: when `OidcEnabled`, the invite modal also shows **Sign in with Google**
   (`pages/Invite/NewUserModal/index.jsx:52`), which starts `/auth/oidc/start?invite=<code>`; the
-  callback claims the invite and links the Google account (P-AUTH-32). With password sign-in
+  callback claims the invite and links the Google account (P-AUTH-37). With password sign-in
   turned off, the password form's `POST /invite/:code` returns 403.
 
 ### P-UI-08 Logout
@@ -792,7 +792,7 @@ Ctrl/Meta 3 s on the settings sidebar unlocks hidden previews and stores
 - **Side effects**: SE-UI-10, SE-UI-05.
 - **Google sign-in section** (multi-user admin; `pages/GeneralSettings/Security/GoogleSignIn.jsx`,
   rendered at `index.jsx:35`): loads `GET /admin/oidc-settings` and saves the whole form with
-  `POST /admin/oidc-settings` (`models/admin.js:7-30`; P-AUTH-33). Fields set by an `OIDC_*` env
+  `POST /admin/oidc-settings` (`models/admin.js:7-30`; P-AUTH-38). Fields set by an `OIDC_*` env
   variable are read-only; the server returns per-field errors and saves nothing when any field is
   invalid. Renders nothing for non-admins (the GET fails).
 - **Notes**: F-11.

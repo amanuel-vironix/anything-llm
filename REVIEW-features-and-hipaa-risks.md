@@ -13,6 +13,19 @@ test but not yet merged into `master`. Findings whose "checked" column in the re
 `map` come from the repo map's code reading and weren't re-read for this revision; the
 others were confirmed in the code.
 
+**Fixed on the access-policies branch** (`claude/access-policies-teams-b1be97`, not yet
+merged; evidence in `docs/repo-map/09-findings-register.md` and the plan's "As built"
+section): F-01 (keys have an owner, workspace scope and expiry; ownerless keys refused in
+multi-user mode; non-admin owners can't reach admin routes), F-04 (agent websocket checks
+the session user), F-05 (a mobile device chats as the user it was paired for), F-06 (body
+`userId` ignored for owned keys), F-50 and SMF-12 (deleting a router unbinds it and workspaces fall
+back), F-23 (router rules scoped to their router). Partly fixed: F-16 (admin-owner keys
+only; still ignores `DISABLE_VIEW_CHAT_HISTORY`), F-21 (OpenAI-compatible chats run as and
+are saved under the key's owner, within their workspaces), F-26 (only admin-owned keys
+manage MCP servers; still allowed in HIPAA mode). Risks 3 and 4 below are reduced
+accordingly; F-02 and F-07 in risk 4 are still open. Agent skills and MCP servers can now
+be restricted by policy, team and role.
+
 This is an engineering review, not legal advice. Whether a deployment is HIPAA compliant
 depends on where and how it runs (hosting, disk encryption, network, business associate
 agreements, policies and training), not only on the code. Use this to decide which
@@ -250,7 +263,7 @@ written separately with no transaction across them (audit issue 2):
 | Long sessions, no MFA, password-only sign-in, no revocation (F-03) | Google sign-in, with short OIDC sessions (MFA through Google); Compliance hardening item 2 |
 | PHI typed into chats with no screening | Guardrails: input checks and redaction |
 | Self-approval of side-effecting tools (F-28), whitelist lost update (SMF-23) | Guardrails: agent and tool guardrails |
-| Scheduled jobs approving every tool (F-24) | Compliance hardening item 8 (HIPAA mode forces multi-user, which turns scheduled jobs off) |
+| Scheduled jobs approving every tool (F-24), single-user only | Scheduled jobs in multi-user mode (jobs run as their owner, only pre-approved tools run unattended); Compliance hardening item 8 |
 | No retention or record of blocks; never-pruned tables (F-40) | Guardrails: audit, alerts and retention |
 | Deletes that only hide chats (F-37), stores out of step (audit issue 2), leftovers after user delete (F-38, F-39) | Compliance hardening item 7 (deletion that reaches and re-checks every store) |
 | Event log delete and silent failures (F-54, SMF-28, SMF-31) | Compliance hardening item 6; guardrail event write path |

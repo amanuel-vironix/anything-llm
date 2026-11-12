@@ -282,13 +282,44 @@ const router = createBrowserRouter([
         },
       },
       {
+        path: "/settings/access-policies",
+        lazy: async () => {
+          const { default: AccessPolicies } = await import(
+            "@/pages/GeneralSettings/AccessPolicies"
+          );
+          return { element: <AdminRoute Component={AccessPolicies} /> };
+        },
+      },
+      {
+        // Team leads have the default role, so this only requires sign-in; the
+        // page checks /team/mine and the server enforces lead-or-admin.
+        path: "/settings/teams",
+        lazy: async () => {
+          const { default: Teams } = await import(
+            "@/pages/GeneralSettings/Teams"
+          );
+          return { element: <PrivateRoute Component={Teams} /> };
+        },
+      },
+      {
+        path: "/settings/teams/:id",
+        lazy: async () => {
+          const { default: TeamDetail } = await import(
+            "@/pages/GeneralSettings/Teams/TeamDetail"
+          );
+          return { element: <PrivateRoute Component={TeamDetail} /> };
+        },
+      },
+      {
         path: "/settings/system-prompt-variables",
         lazy: async () => {
           const { default: SystemPromptVariables } = await import(
             "@/pages/Admin/SystemPromptVariables"
           );
+          // Team leads (default role) create their team's variables here, so this
+          // only requires sign-in; the page hides actions and the server enforces.
           return {
-            element: <AdminRoute Component={SystemPromptVariables} />,
+            element: <PrivateRoute Component={SystemPromptVariables} />,
           };
         },
       },

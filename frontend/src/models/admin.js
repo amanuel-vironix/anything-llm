@@ -261,6 +261,28 @@ const Admin = {
         return false;
       });
   },
+  /**
+   * Change an API key's owner, workspace scope or expiry.
+   * @param {number} apiKeyId
+   * @param {{userId?: number, workspaceIds?: number[]|null, expiresAt?: string|null}} data
+   * @returns {Promise<{apiKey: object|null, error: string|null}>}
+   */
+  updateApiKey: async function (apiKeyId, data = {}) {
+    return fetch(`${API_BASE}/admin/api-keys/${apiKeyId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify(data),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (json) return json;
+        throw new Error(res.statusText || "Error updating api key.");
+      })
+      .catch((e) => {
+        console.error(e);
+        return { apiKey: null, error: e.message };
+      });
+  },
 };
 
 export default Admin;

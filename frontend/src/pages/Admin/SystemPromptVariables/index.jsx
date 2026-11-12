@@ -11,15 +11,35 @@ import AddVariableModal from "./AddVariableModal";
 import { useModal } from "@/hooks/useModal";
 import * as Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
+import useUser from "@/hooks/useUser";
+import useMyTeam from "@/hooks/useMyTeam";
+import Team from "@/models/team";
 
 export default function SystemPromptVariables() {
   const [variables, setVariables] = useState([]);
   const [loading, setLoading] = useState(true);
   const { isOpen, openModal, closeModal } = useModal();
+  const { user } = useUser();
+  const { team: myTeam, role: myTeamRole } = useMyTeam();
+  const [teams, setTeams] = useState([]);
+  // Single-user mode has no user and full access.
+  const isAdmin = !user || user.role === "admin";
+  const leadOfTeam = myTeamRole === "lead" ? myTeam : null;
+  const canCreate = isAdmin || !!leadOfTeam;
 
   useEffect(() => {
     fetchVariables();
+    if (user?.role === "admin") Team.getAll().then(setTeams);
   }, []);
+
+  const teamLabel = (teamId) => {
+    if (!teamId) return null;
+    if (myTeam?.id === teamId) return myTeam.name;
+    return teams.find((team) => team.id === teamId)?.name || `Team #${teamId}`;
+  };
+  // Admins manage every variable; a lead manages their own team's.
+  const canManage = (variable) =>
+    isAdmin || (!!leadOfTeam && variable.teamId === leadOfTeam.id);
 
   const fetchVariables = async () => {
     setLoading(true);
@@ -56,12 +76,14 @@ export default function SystemPromptVariables() {
           </div>
 
           <div className="w-full justify-end flex">
-            <CTAButton
-              onClick={openModal}
-              className="mt-3 mr-0 mb-4 md:-mb-6 z-10"
-            >
-              <Plus className="h-4 w-4" weight="bold" /> Add Variable
-            </CTAButton>
+            {canCreate && (
+              <CTAButton
+                onClick={openModal}
+                className="mt-3 mr-0 mb-4 md:-mb-6 z-10"
+              >
+                <Plus className="h-4 w-4" weight="bold" /> Add Variable
+              </CTAButton>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -95,6 +117,11 @@ export default function SystemPromptVariables() {
                     <th scope="col" className="px-4 py-2">
                       Type
                     </th>
+                    {!!user && (
+                      <th scope="col" className="px-4 py-2">
+                        Visible to
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -103,6 +130,9 @@ export default function SystemPromptVariables() {
                       key={variable.id}
                       variable={variable}
                       onRefresh={fetchVariables}
+                      showVisibility={!!user}
+                      teamName={teamLabel(variable.teamId)}
+                      canManage={canManage(variable)}
                     />
                   ))}
                 </tbody>
@@ -113,7 +143,13 @@ export default function SystemPromptVariables() {
       </div>
 
       <Modal isOpen={isOpen} onClose={closeModal}>
-        <AddVariableModal closeModal={closeModal} onRefresh={fetchVariables} />
+        <AddVariableModal
+          closeModal={closeModal}
+          onRefresh={fetchVariables}
+          isAdmin={isAdmin}
+          teams={teams}
+          leadOfTeam={leadOfTeam}
+        />
       </Modal>
     </div>
   );

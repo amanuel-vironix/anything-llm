@@ -143,10 +143,29 @@ const SystemPromptVariables = {
    * @param {number|null} userId - the current user ID (determines if in multi-user mode)
    * @returns {Promise<SystemPromptVariable[]>}
    */
-  getAll: async function (userId = null) {
-    // All user-defined system variables are available to everyone globally since only admins can create them.
+  getAll: async function (userId = null, { allTeams = false } = {}) {
+    // Variables without a team are global (admins create them). Variables shared with a
+    // team are seen only by that team's members (and admins, with `allTeams`).
+    // A failed lookup hides team variables (fails closed) instead of breaking expansion.
+    const membership = userId
+      ? await prisma.team_members
+          .findUnique({
+            where: { user_id: Number(userId) },
+            select: { team_id: true },
+          })
+          .catch(() => null)
+      : null;
     const userDefinedSystemVariables =
-      await prisma.system_prompt_variables.findMany();
+      await prisma.system_prompt_variables.findMany({
+        where: allTeams
+          ? {}
+          : {
+              OR: [
+                { team_id: null },
+                ...(membership ? [{ team_id: membership.team_id }] : []),
+              ],
+            },
+      });
     const formattedDbVars = userDefinedSystemVariables.map((v) => ({
       id: v.id,
       key: v.key,
@@ -154,6 +173,7 @@ const SystemPromptVariables = {
       description: v.description,
       type: v.type,
       userId: v.userId,
+      teamId: v.team_id ?? null,
     }));
 
     // If userId is not provided, filter the default variables to only include non-multiUserRequired variables
@@ -176,6 +196,7 @@ const SystemPromptVariables = {
     description = null,
     type = "static",
     userId = null,
+    teamId = null,
   }) {
     await this._checkVariableKey(key, true);
     return await prisma.system_prompt_variables.create({
@@ -185,8 +206,31 @@ const SystemPromptVariables = {
         description: description ? String(description) : null,
         type: type ? String(type) : "static",
         userId: userId ? Number(userId) : null,
+        team_id: teamId ? Number(teamId) : null,
       },
     });
+  },
+
+  /**
+   * The variable if `user` may edit or delete it: an admin (or single-user mode), or a
+   * lead of the team it is shared with.
+   * @returns {Promise<object|null>}
+   */
+  editableBy: async function (id, user = null) {
+    const variable = await prisma.system_prompt_variables.findFirst({
+      where: { id: Number(id) },
+    });
+    if (!variable) return null;
+    if (!user || user.role === "admin") return variable;
+    if (!variable.team_id) return null;
+    const lead = await prisma.team_members.findFirst({
+      where: {
+        user_id: Number(user.id),
+        team_id: variable.team_id,
+        role: "lead",
+      },
+    });
+    return lead ? variable : null;
   },
 
   /**

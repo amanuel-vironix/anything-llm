@@ -330,7 +330,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   3. `User.prepareCreate({role:"default"})` validates and hashes without writing (`server/endpoints/invite.js:80`, `server/models/user.js:182`).
   4. `Invite.claim(code, data)`: one transaction that flips the invite with `updateMany where status="pending"`, requires a count of 1, creates the user and sets `claimedBy` (`server/models/invite.js:60-80`). Workspaces are added afterwards (`_addToInviteWorkspaces`, `:96`).
   5. Log `invite_accepted`.
-  6. The client then logs in through `/request-token` (`frontend/src/pages/Invite/NewUserModal/index.jsx:34`). The invite page also offers **Sign in with Google**, which claims the invite through P-AUTH-32.
+  6. The client then logs in through `/request-token` (`frontend/src/pages/Invite/NewUserModal/index.jsx:34`). The invite page also offers **Sign in with Google**, which claims the invite through P-AUTH-37.
 - **State changes:** `users`: row created. `invites.status: pending → claimed`, `invites.claimedBy: null → userId`. `workspace_users`: rows created.
 - **Side effects:** SE-AUTH-24 (DB `users`, `invites`, `workspace_users`), SE-AUTH-25 (LOG).
 - **Failure and edge paths:** an invite that is not pending, or was claimed or disabled by a concurrent request, makes the whole transaction roll back: no user is created (SMF-14, fixed in `169b68a0`; `server/__tests__/endpoints/inviteClaim.test.js`). Workspace-assignment errors are still swallowed.
@@ -451,7 +451,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   4. One transaction (`server/utils/PasswordRecovery/index.js:102-115`): consume the token with a conditional `deleteMany` (by id, `expiresAt >= now`, count must be 1), set the new password and `seen_recovery_codes=false`, then delete the user's other reset tokens and recovery codes.
   5. Log `password_reset` with the username (no password).
 - **State changes:** `users.password: old → new`. `users.seen_recovery_codes: true → false`. `password_reset_tokens` and `recovery_codes`: rows deleted.
-- **Side effects:** SE-AUTH-40 (DB), SE-AUTH-56 (LOG `password_reset`).
+- **Side effects:** SE-AUTH-40 (DB), SE-AUTH-63 (LOG `password_reset`).
 - **Failure and edge paths:**
   - Empty or mismatched passwords throw, so the endpoint returns **500** with the message (`server/endpoints/system.js:445-447`), not 400.
   - A rejected password (complexity) leaves the token, the recovery codes and `seen_recovery_codes` untouched. Two concurrent resets with one token: only one succeeds (F-10 / SMF-15, fixed in `169b68a0`; `server/__tests__/utils/PasswordRecovery/resetPassword.test.js`). Recovery is still unlogged and not rate limited (F-08).
@@ -523,8 +523,47 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Not called from:** the mobile chat command (`server/endpoints/mobile/utils/index.js:180` calls `ApiChatHandler.streamChat` with no limit check), or developer API chat (sessionless). The Telegram and embed channels were not checked for this, **(unverified)**.
 - **State changes:** none (read-only).
 - **Notes:** the window is a rolling 24 hours, not a calendar day. Hidden (`include=false`) chats still count, deliberately so (`server/endpoints/workspaceThreads.js:209-210`). **Mobile is a bypass** for limited users. Managers are limited, and only admins are exempt.
+- **Update (branch `claude/access-policies-teams-b1be97`):** `ApiChatHandler.chatSync`/`streamChat` now check the limit for any user they are given (`server/utils/chats/apiChatHandler.js:34,197,587`), which covers developer API chats with an owned key and mobile chat. The OpenAI-compatible route checks it before chatting (`server/endpoints/api/openai/index.js`, POST `/v1/openai/chat/completions`).
 
-### P-AUTH-31 — Google (OIDC) sign-in: start
+### P-AUTH-31 — Scoped developer API key check
+- **Actor and preconditions:** any `/v1` caller with `Authorization: Bearer <key>`.
+- **Steps:** `validApiKey` (`server/utils/middleware/validApiKey.js:83`) loads the key; refuses an expired key (`:107`, logs `api_key_expired_refused`); for an owned key (`user_id` set) loads the owner, refuses a missing or suspended owner, then checks the owner's role against `API_ROUTE_ROLES` keyed by `METHOD request.route.path` (`:16`); unlisted routes are admin-only. An ownerless (legacy) key is refused in multi-user mode (`:139`, logs `legacy_api_key_refused`) and passes in single-user mode. Sets `response.locals.apiKey` and, for owned keys, `response.locals.user`.
+- **Reads:** `api_keys`, `users`, `system_settings.multi_user_mode`.
+- **State changes:** `api_keys.lastUsedAt: old → now`, at most once a minute per key, fire-and-forget (`:156`).
+- **Side effects:** DB (`api_keys`), LOG.
+- **Failure and edge paths:** a failed `lastUsedAt` write never fails the request. Workspace routes then scope by `apiKeyWorkspace`/`apiKeyWorkspaces` (`:194`): the owner's workspaces (members, team, or all for admins and managers) narrowed by `workspace_ids`.
+- **Notes:** fixes F-01. A test asserts every table entry names a registered route (`server/__tests__/endpoints/api/scopedApiKeys.test.js`).
+
+### P-AUTH-32 — Admin creates or rescopes an API key
+- **Actor and preconditions:** admin, multi-user mode (single-user: `/system/generate-api-key` takes `workspaceIds`, `expiresAt`, no owner).
+- **Steps:** POST `/admin/generate-api-key` (`server/endpoints/admin.js:527`) with `userId` (default: the creating admin), `workspaceIds`, `expiresAt`; POST `/admin/api-keys/:id` (`:564`) changes any of them. Both validate through `ApiKey.validateScope` (`server/models/apiKeys.js:46`): the owner exists, every workspace exists, the expiry is in the future.
+- **State changes:** `api_keys` row created / `user_id`, `workspace_ids`, `expiresAt`, `lastUpdatedAt` updated.
+- **Side effects:** DB (`api_keys`), LOG (`api_key_created`, `api_key_updated`).
+- **Notes:** assigning an owner is how a legacy key keeps working after the switch to multi-user mode (decision 24: refused at once).
+
+### P-AUTH-33 — Access policy administration and assignment
+- **Actor and preconditions:** admin, multi-user mode (`strict[admin]`).
+- **Steps:** `/admin/access-policies` list/new/update/delete (`server/endpoints/accessPolicies.js:49,60,86,113`) through `AccessPolicy` (`server/models/accessPolicy.js`); POST `/admin/users/:id/policy` (`:139`) sets `users.policy_id` with a conditional `updateMany`. Assignment is not in `User.writable`, so managers (who can edit users) can't assign policies (decision 3).
+- **Reads:** `access_policies`, `model_routers`, `users`.
+- **State changes:** `access_policies` row created/updated/deleted; on delete, `users.policy_id` and `teams.policy_id` pointing at it → null in one transaction; `users.policy_id: old → new`.
+- **Side effects:** DB (`access_policies`, `users`, `teams`), LOG (`policy_created`, `policy_updated`, `policy_deleted`, `policy_assigned`).
+- **Notes:** the policy is read per request by `resolvePolicyChain` (`server/utils/accessPolicy/index.js:184`): user policy, then team policy, then none.
+
+### P-AUTH-34 — Team administration (admin)
+- **Actor and preconditions:** admin, multi-user mode.
+- **Steps:** `/admin/teams` list/new/update/delete (`server/endpoints/teams.js:33,42,59,80`) through `Team` (`server/models/team.js`). Delete (`server/models/team.js:309`) in one transaction drops memberships, sets `workspaces.team_id` → null (decision 30), returns shared presets (`team_id` → 0, dropping copies that collide with the owner's personal one) and variables (`team_id` → null).
+- **State changes:** `teams` row created/updated/deleted; `team_members` rows deleted; `workspaces.team_id`, `slash_command_presets.team_id`, `system_prompt_variables.team_id` reset.
+- **Side effects:** DB, LOG (`team_created`, `team_updated`, `team_deleted` with counts).
+
+### P-AUTH-35 — Team lead manages members
+- **Actor and preconditions:** multi-user mode; a user whose `team_members.role` is `lead` for the team in the URL, or an admin. Checked by `teamRoleValid` (`server/utils/middleware/teamProtected.js:18`), which reads membership from the database each request.
+- **Steps:** GET `/teams/:teamId/members`, `/candidates`; POST `/teams/:teamId/members` (`server/endpoints/teams.js:221`) adds an active `default`-role user with no team (admins: any user); DELETE `/teams/:teamId/members/:userId` (`:259`); POST `.../role` (`:287`).
+- **State changes:** `team_members` row created/deleted; `team_members.role: member ↔ lead`.
+- **Side effects:** DB (`team_members`), LOG (`team_member_added`, `team_member_removed`, `team_lead_changed`).
+- **Failure and edge paths:** one team per user (unique `team_members.user_id`; a second add gets "already belongs to a team"); removing or demoting the last lead while others remain is refused by a conditional `deleteMany`/`updateMany` (`server/models/team.js:223,263`) unless an admin acts (`force`).
+- **Notes:** leads can't change roles, policies or suspension, see other teams, or reach `/admin/*`. The UI gate is cosmetic (F-13); the middleware is the check.
+
+### P-AUTH-36 — Google (OIDC) sign-in: start
 - **Actor and preconditions:** anyone. Multi-user mode and Google sign-in enabled (`getOidcSettings`, `server/utils/auth/oidcSettings.js:158`). Login page or invite page **Sign in with Google** (`frontend/src/components/Modals/Password/GoogleSignInButton.jsx:45`).
 - **Steps:**
   1. GET `/auth/oidc/start[?invite=<code>]` (`server/endpoints/auth/oidc.js:46`).
@@ -532,10 +571,10 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   3. Set the `allm_oidc` cookie (httpOnly, `sameSite=lax`, path `/api/auth/oidc`, `secure` when the redirect URI is https; `stateCookieOptions`, `:135`) and redirect to Google's authorization URL with `scope=openid email profile`, S256 PKCE.
 - **Reads:** `system_settings.oidc_*`, env overrides.
 - **State changes:** browser cookie only.
-- **Side effects:** SE-AUTH-47 (NET:google discovery), SE-AUTH-48 (CACHE client).
+- **Side effects:** SE-AUTH-54 (NET:google discovery), SE-AUTH-55 (CACHE client).
 - **Failure and edge paths:** disabled or misconfigured: redirect to `/login?sso_error=<reason>`.
 
-### P-AUTH-32 — Google (OIDC) sign-in: callback
+### P-AUTH-37 — Google (OIDC) sign-in: callback
 - **Actor and preconditions:** the browser returning from Google with `code` and `state`, and the `allm_oidc` cookie.
 - **Steps:**
   1. GET `/auth/oidc/callback` (`server/endpoints/auth/oidc.js:68`) → `completeSignIn` (`server/utils/auth/oidc.js:298`).
@@ -547,20 +586,20 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   7. The SSO page exchanges the token at `/request-token/sso/simple` (P-AUTH-11), which re-signs the session JWT with `OIDC_SESSION_EXPIRY` (default `12h`, `server/endpoints/system.js:391-404`).
 - **Reads:** `system_settings.oidc_*`, `user_identities`, `users`, `invites`.
 - **State changes:** `users` row created (auto/invite); `user_identities` row created or `lastLoginAt`/`email` updated; `invites.status: pending → claimed`; `temporary_auth_tokens` replaced.
-- **Side effects:** SE-AUTH-49 (NET:google token + JWKS), SE-AUTH-50 (DB), SE-AUTH-51 (LOG).
+- **Side effects:** SE-AUTH-56 (NET:google token + JWKS), SE-AUTH-57 (DB), SE-AUTH-58 (LOG).
 - **Failure and edge paths:** every refusal (`REFUSALS`, `server/utils/auth/oidc.js:30`: state, provider error, token verification, unverified email, domain, `hd`, no account, suspended, invite invalid, disabled) logs `failed_login_oidc` with `reason`, the email when known, and a detail, then redirects to `/login?sso_error=<reason>`. Two concurrent first sign-ins of the same Google account create one user (`server/__tests__/endpoints/oidc.test.js`).
 - **Notes:**
   - An existing password account with the same email is **not** linked; a separate account is created. Linking from the account menu is not built.
   - The configuration in force is validated on every read (`getOidcSettings`, `server/utils/auth/oidcSettings.js`), including env-only configuration. When it's invalid, Google sign-in counts as off and password sign-in is on for everyone.
   - Login CSRF (known, low impact): the `/sso/simple?token=` link isn't bound to the browser that started the flow. Someone in an allowed domain can send theirs to a colleague, who is then signed in as the sender. Simple SSO has the same property.
 
-### P-AUTH-33 — Google sign-in settings
+### P-AUTH-38 — Google sign-in settings
 - **Actor and preconditions:** multi-user admin. Settings → Security → Google sign-in (`frontend/src/pages/GeneralSettings/Security/GoogleSignIn.jsx`).
 - **Steps:**
   - GET `/admin/oidc-settings` → `oidcSettingsForDisplay` (secret masked, `envOverrides` listed; `server/utils/auth/oidcSettings.js:273`).
   - POST `/admin/oidc-settings` → `saveOidcSettings` (`:232-271`): merge with stored values (a masked secret keeps the stored one), apply env overrides, `validateOidcSettings` (`:185`: https URLs or http on localhost, domain syntax, provisioning mode, role `default`/`manager`, password-off only with sign-in on, multi-user required) **before any write**; then upsert every label in one `$transaction`, reset the client cache, and log `oidc_settings_updated`.
 - **State changes:** `system_settings.oidc_*` rows upserted (secret encrypted with `EncryptionManager`).
-- **Side effects:** SE-AUTH-52 (DB), SE-AUTH-53 (CACHE), SE-AUTH-54 (LOG).
+- **Side effects:** SE-AUTH-59 (DB), SE-AUTH-60 (CACHE), SE-AUTH-61 (LOG).
 - **Failure and edge paths:** any invalid field returns `{success:false, errors:{field: message}}` and writes nothing (`server/__tests__/utils/auth/oidcSettings.test.js`). Not stored through `updateENV`.
 - **Notes:** `/setup-complete` exposes only `OidcEnabled` and `OidcPasswordLoginDisabled` (`server/models/systemSettings.js`, `oidcPublicSettings`).
 
@@ -675,16 +714,23 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 | SE-AUTH-44 | P-AUTH-28 | CACHE | `TemporaryMobileDeviceRequests` Map set/delete/sweep | `server/models/mobileDevice.js:48,72,84-89` | | in-memory |
 | SE-AUTH-45 | P-AUTH-28 | DB | `desktop_mobile_devices` create | `server/models/mobileDevice.js:125` | delete | no LOG |
 | SE-AUTH-46 | P-AUTH-29 | DB | `desktop_mobile_devices.approved` / delete | `server/models/mobileDevice.js:160,192` | | no LOG |
-| SE-AUTH-47 | P-AUTH-31 | NET:google | OpenID discovery document | `server/utils/auth/oidc.js:76-107` | | cached 1 h |
-| SE-AUTH-48 | P-AUTH-31 | CACHE | in-memory OIDC client | `server/utils/auth/oidc.js:47,76` | | reset on settings save |
-| SE-AUTH-49 | P-AUTH-32 | NET:google | token endpoint (code + PKCE verifier), JWKS | `server/utils/auth/oidc.js:298` | | |
-| SE-AUTH-50 | P-AUTH-32 | DB | `users` create, `user_identities` create/update, `invites` claim, `temporary_auth_tokens` replace | `server/utils/auth/oidc.js:209-296`; `server/models/userIdentity.js:16-60` | delete user (cascades identity) | |
-| SE-AUTH-51 | P-AUTH-32 | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | `server/endpoints/auth/oidc.js:87,112-122,131` | | email stored in `event_logs` |
-| SE-AUTH-52 | P-AUTH-33 | DB | `system_settings.oidc_*` upsert in one transaction | `server/utils/auth/oidcSettings.js:232-271` | yes | secret encrypted |
-| SE-AUTH-53 | P-AUTH-33 | CACHE | OIDC client cache reset | `server/utils/auth/oidc.js:47` | | |
-| SE-AUTH-54 | P-AUTH-33 | LOG | `oidc_settings_updated` | `server/endpoints/auth/oidc.js:166` | | |
-| SE-AUTH-55 | P-AUTH-06 | LOG | `failed_login_password_disabled` | `server/endpoints/system.js:292` | | |
-| SE-AUTH-56 | P-AUTH-22 | LOG | `password_reset` (username only) | `server/utils/PasswordRecovery/index.js:122` | | was `user_updated` before this branch |
+| SE-AUTH-47 | P-AUTH-31 | DB | `api_keys.lastUsedAt` (at most once a minute per key) | `server/utils/middleware/validApiKey.js:156` | overwritten | fire-and-forget |
+| SE-AUTH-48 | P-AUTH-31 | LOG | `legacy_api_key_refused`, `api_key_expired_refused` | `server/utils/middleware/validApiKey.js:107,139` | no | |
+| SE-AUTH-49 | P-AUTH-32 | DB | `api_keys` create / `user_id`, `workspace_ids`, `expiresAt` update | `server/models/apiKeys.js:19,103` | yes | LOG `api_key_created`, `api_key_updated` |
+| SE-AUTH-50 | P-AUTH-33 | DB | `access_policies` create/update/delete; `users.policy_id`, `teams.policy_id` → null on delete | `server/models/accessPolicy.js` | delete is not | LOG `policy_*` |
+| SE-AUTH-51 | P-AUTH-33 | DB | `users.policy_id` set/cleared | `server/endpoints/accessPolicies.js:139` | yes | LOG `policy_assigned` |
+| SE-AUTH-52 | P-AUTH-34 | DB | `teams` create/update/delete; delete resets `workspaces.team_id`, preset and variable `team_id`, drops `team_members` | `server/models/team.js:309` | delete is not | LOG `team_*` |
+| SE-AUTH-53 | P-AUTH-35 | DB | `team_members` create/delete, `role` update | `server/models/team.js:184,223,263` | yes | LOG `team_member_added/removed`, `team_lead_changed` |
+| SE-AUTH-54 | P-AUTH-36 | NET:google | OpenID discovery document | `server/utils/auth/oidc.js:76-107` | | cached 1 h |
+| SE-AUTH-55 | P-AUTH-36 | CACHE | in-memory OIDC client | `server/utils/auth/oidc.js:47,76` | | reset on settings save |
+| SE-AUTH-56 | P-AUTH-37 | NET:google | token endpoint (code + PKCE verifier), JWKS | `server/utils/auth/oidc.js:298` | | |
+| SE-AUTH-57 | P-AUTH-37 | DB | `users` create, `user_identities` create/update, `invites` claim, `temporary_auth_tokens` replace | `server/utils/auth/oidc.js:209-296`; `server/models/userIdentity.js:16-60` | delete user (cascades identity) | |
+| SE-AUTH-58 | P-AUTH-37 | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | `server/endpoints/auth/oidc.js:87,112-122,131` | | email stored in `event_logs` |
+| SE-AUTH-59 | P-AUTH-38 | DB | `system_settings.oidc_*` upsert in one transaction | `server/utils/auth/oidcSettings.js:232-271` | yes | secret encrypted |
+| SE-AUTH-60 | P-AUTH-38 | CACHE | OIDC client cache reset | `server/utils/auth/oidc.js:47` | | |
+| SE-AUTH-61 | P-AUTH-38 | LOG | `oidc_settings_updated` | `server/endpoints/auth/oidc.js:166` | | |
+| SE-AUTH-62 | P-AUTH-06 | LOG | `failed_login_password_disabled` | `server/endpoints/system.js:292` | | |
+| SE-AUTH-63 | P-AUTH-22 | LOG | `password_reset` (username only) | `server/utils/PasswordRecovery/index.js:122` | | was `user_updated` before this branch |
 
 ---
 

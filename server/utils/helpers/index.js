@@ -734,17 +734,45 @@ async function resolveProviderConnector({
   apiSessionId = null,
   temperature = null,
 }) {
+  const {
+    getPolicyForUser,
+    enforceAllowedSelection,
+    routerSelectionGuard,
+    policyRouterWorkspace,
+  } = require("../accessPolicy");
   const effectiveProvider = workspace?.chatProvider || process.env.LLM_PROVIDER;
   // An override that is not a usable temperature (eg: absent from an API request)
   // defers to the workspace setting rather than omitting the parameter.
   const temperatureOverride = parseFloat(temperature) >= 0 ? temperature : null;
+  const effectiveTemperature = temperatureOverride ?? workspace?.openAiTemp;
 
-  if (effectiveProvider !== "anythingllm-router") {
+  // The account's access policy (own, then team). Null means today's behavior.
+  const policy = await getPolicyForUser(user);
+
+  if (effectiveProvider !== "anythingllm-router" && !policy?.router_id) {
+    const connector = getLLMProvider({
+      provider: workspace?.chatProvider,
+      model: workspace?.chatModel,
+      temperature: effectiveTemperature,
+    });
+    if (!policy)
+      return { connector, routingMetadata: null, prefetchedContext: null };
+
+    const selection = enforceAllowedSelection(
+      policy,
+      {
+        provider: effectiveProvider || "openai",
+        model: connector.model ?? null,
+      },
+      { userId: user?.id ?? null }
+    );
+    if (!selection.substituted)
+      return { connector, routingMetadata: null, prefetchedContext: null };
     return {
       connector: getLLMProvider({
-        provider: workspace?.chatProvider,
-        model: workspace?.chatModel,
-        temperature: temperatureOverride ?? workspace?.openAiTemp,
+        provider: selection.provider,
+        model: selection.model,
+        temperature: effectiveTemperature,
       }),
       routingMetadata: null,
       prefetchedContext: null,
@@ -754,19 +782,15 @@ async function resolveProviderConnector({
   const { AnythingLLMModelRouter } = require("../AiProviders/modelRouter");
   const { ModelRouterService } = require("../router");
 
-  const routerWorkspace = workspace?.router_id
-    ? workspace
-    : {
-        ...workspace,
-        router_id: process.env.MODEL_ROUTER_ID
-          ? Number(process.env.MODEL_ROUTER_ID)
-          : null,
-      };
+  const routerWorkspace = policyRouterWorkspace(workspace, policy);
 
   const router = new AnythingLLMModelRouter(
     routerWorkspace,
     null,
-    temperatureOverride
+    temperatureOverride,
+    // A routed model the policy doesn't allow is swapped for the policy default
+    // before the delegate is built, so it is never called.
+    routerSelectionGuard(policy, { userId: user?.id ?? null })
   );
   const ctx = await ModelRouterService.gatherRoutingContext({
     workspace,

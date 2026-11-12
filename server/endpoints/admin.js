@@ -35,6 +35,9 @@ const {
 
 function adminEndpoints(app) {
   if (!app) return;
+  // Access policies and teams register here so server/index.js stays untouched.
+  require("./accessPolicies").accessPolicyEndpoints(app);
+  require("./teams").teamEndpoints(app);
 
   app.get(
     "/admin/users",
@@ -542,17 +545,59 @@ function adminEndpoints(app) {
     async (request, response) => {
       try {
         const user = await userFromSession(request, response);
-        const { name = null } = reqBody(request);
-        const { apiKey, error } = await ApiKey.create(user.id, name);
-        await EventLogs.logEvent(
-          "api_key_created",
-          { createdBy: user?.username, name: apiKey?.name },
-          user?.id
+        const body = reqBody(request);
+        // Every multi-user key has an owner it runs as; it defaults to the admin who
+        // created it. workspaceIds narrows it, expiresAt ends it.
+        const scope = {
+          userId: body.userId ?? user.id,
+          workspaceIds: body.workspaceIds ?? null,
+          expiresAt: body.expiresAt ?? null,
+        };
+        const { apiKey, error } = await ApiKey.create(
+          user.id,
+          body.name ?? null,
+          scope
         );
+        if (apiKey) {
+          await EventLogs.logEvent(
+            "api_key_created",
+            { createdBy: user?.username, name: apiKey.name, ...scope },
+            user?.id
+          );
+        }
         return response.status(200).json({
           apiKey,
           error,
         });
+      } catch (e) {
+        console.error(e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Change a key's owner, workspace scope or expiry. Assigning an owner is how a
+  // legacy key keeps working in multi-user mode.
+  app.post(
+    "/admin/api-keys/:id",
+    [validatedRequest, strictMultiUserRoleValid([ROLES.admin])],
+    async (request, response) => {
+      try {
+        const { id } = request.params;
+        if (!id || isNaN(Number(id))) return response.sendStatus(400).end();
+        const body = reqBody(request);
+        const scope = {};
+        for (const key of ["userId", "workspaceIds", "expiresAt"])
+          if (Object.prototype.hasOwnProperty.call(body, key))
+            scope[key] = body[key];
+        const { apiKey, error } = await ApiKey.updateScope(Number(id), scope);
+        if (error) return response.status(400).json({ apiKey: null, error });
+        await EventLogs.logEvent(
+          "api_key_updated",
+          { apiKeyId: apiKey.id, ...scope },
+          response.locals?.user?.id
+        );
+        return response.status(200).json({ apiKey, error: null });
       } catch (e) {
         console.error(e);
         response.sendStatus(500).end();

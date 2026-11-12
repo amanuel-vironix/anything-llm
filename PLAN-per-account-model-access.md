@@ -1,6 +1,126 @@
 # Plan: per-account access, Google sign-in, guardrails and HIPAA hardening for a centralized LLM
 
-Status: draft, not started. Nothing in this plan has been built.
+Status: **access policies, scoped API keys and teams built** on branch
+`claude/access-policies-teams-b1be97` (see "As built: access policies and teams" below);
+not yet merged. Google sign-in is on `claude/google-oidc-signin-856485`; audit logging on
+`claude/audit-logging-compliance-403f4f`. Guardrails, compliance hardening, budgets and
+scheduled jobs in multi-user mode are not started.
+
+## As built: access policies and teams
+
+**Decisions taken (user, 2026-11-11):** 1 substitute the policy default; 2 admin-only keys;
+3 admin-only policy assignment; 5 tools in this PR; 6 admins without a policy keep every
+tool; 21 router delete unbinds and falls back; 24 legacy keys refused at once (applied in
+multi-user mode only: single-user installs have no users to own a key); 25 10-minute
+invocation expiry; 28 one team per user; 29 managers keep instance-wide access; 30 a
+deleted team's workspaces become admin-only; 31 leads can't read members' chats; 32 Teams
+in this PR. Decisions 33–36 (scheduled jobs) belong to the later scheduled-jobs PR; this PR
+only adds `access_policies.max_scheduled_jobs` (default 5) and `min_job_interval_minutes`
+(default 60) so that PR needs no new `access_policies` migration.
+
+**Commits** (on `origin/master` at `5cbbfeda`): `23db7c8c` schema, models and policy
+module; `7d4e3afb` model enforcement and identity fixes (F-04, F-05 pairing, router
+delete and rule scoping); `d515b2a6` agent tool and MCP filtering; `a8ce01a6` scoped API
+keys (F-01, F-06); `58e3c119` refusal logging; `d15e7fe3` teams, leads, admin endpoints and
+sharing; `89bf9290` MCP route test; then the admin UI and docs commits.
+
+**Where it differs from the plan:**
+- One migration, `20261111120000_access_policies_teams`. `allowed_models` is nullable:
+  null means "no model restriction", so a policy can carry only a tool rule or a router.
+  `slash_command_presets.team_id` is `Int @default(0)` (not nullable) because it is part of
+  the unique key `(uid, team_id, command)`; 0 means personal.
+- Decision 24 replaces `LEGACY_API_KEYS_UNTIL`: ownerless keys get 403 in multi-user mode
+  immediately (logged `legacy_api_key_refused`); admins assign an owner to keep one.
+- `/v1` roles are one table in `validApiKey` keyed by the matched route pattern; any route
+  missing from it is admin-only, so new routes fail closed. A test checks every entry
+  names a real route.
+- `EphemeralAgentHandler` keeps its own function list (the API intentionally omits the
+  clarifying-question tools) and filters it with the same rule, instead of reusing
+  `getDefinition`.
+- The chat UI's tool menus use admin-only endpoints, so they stay unfiltered for admins.
+- Policy assignment is its own route (`POST /admin/users/:id/policy`); `policy_id` is not
+  in `User.writable`, so managers, who can edit users, can't assign policies, and
+  `models/user.js` is unchanged (it is also edited by the Google sign-in branch).
+- Team leads edit a team workspace's safe fields through
+  `POST /teams/:teamId/workspaces/:slug/update` instead of the existing workspace routes,
+  so `server/endpoints/workspaces.js` (instrumented by the audit branch) is untouched.
+  "Add or remove team members on a team workspace" isn't needed: members see team
+  workspaces through `team_id`.
+- Sharing a tool with a team starts the team's rule from the `default` role rule when the
+  team has none, so the team gains only the shared tool.
+- Mobile chat now hits the daily limit through `ApiChatHandler`'s check.
+- Refusals are logged without blocking: `model_refused_by_policy`,
+  `tool_refused_by_policy`, `agent_ws_rejected`, `api_key_expired_refused` (names agreed
+  with the audit branch, which maps them to its catalogue).
+- Not done here: HIPAA-mode team boundaries (managers losing instance-wide access), Google
+  Group sync (`idp_group` is stored only), filtering the developer API's
+  `grepAllSlashCommands` (it still applies every user's presets), Swagger docs not
+  regenerated for the new `/v1` fields (see "Admin UI" below for UI gaps).
+
+**Whole-change review** (fresh reviewer, server diff). Confirmed and fixed, each with a
+regression test and a planted bug it catches:
+- High: router LLM rules sent the prompt to the router's fallback (classifier) model
+  before the policy check. LLM rules are now skipped when the policy doesn't allow
+  that model (`routerSelectionGuard(...).allows`); API vector-search and the agent
+  memory search now pass the user. (`5778716d`)
+- Leads could remove themselves (lifting the team policy) and remove, demote or
+  promote managers and admins on their team; a leaver's shared presets stayed with
+  the team. (`9765ae8c`)
+- A workspace-scoped key could embed into other workspaces through `addToWorkspaces`
+  and call admin-only and document-library routes. (`2f2a8840`)
+- Role defaults failed open on a read error or bad JSON; saving them ignored a failed
+  write. (`73716c84`)
+- Tool sharing created deny policies for teams with no rule of their own, outside a
+  transaction. (`92ec5d3a`)
+- From the UI build: deleting a team made its prompt variables global (now deleted);
+  `api_key_created` was logged for failed creates. (`5778716d`)
+Accepted as designed: removing a member lifts the team policy from them (the role
+default is the floor); a team's copied tool rule applies to managers on the team.
+
+**Admin UI** (`ef33d68e`): Access policies page (policies, role defaults, tool sharing),
+Teams pages (admin list, lead team detail), policy and team columns on Users, owner,
+scope and expiry on API keys, team sharing for presets and prompt variables, user
+choice when pairing a phone. Checked by `yarn build` and ESLint only, not in a
+browser. New text is plain English (not `t()` keys), like the neighbouring pages. The
+prompt-variables page now needs sign-in only (leads use it); the server enforces edit
+rights. Not built: sidebar grouping of team workspaces, an "Owning team" field in
+workspace settings (done from the Teams page instead), a picker for sub-skills
+(`parent#child` is typed).
+
+**Validation** (server): full suite `npx jest server/__tests__` passes (95 suites, 2176
+tests, after the review fixes). One
+existing test changed: `server/__tests__/utils/agents/defaults.test.js` gained a
+pass-through mock of `agentToolAccessForUser`. Two existing tests are timing-sensitive and
+failed once each under load, passing alone (`mcpServers.test.js`,
+`modelPricing/index.test.js`; also `create-files/pptx/images.test.js`). Every enforcement
+point had a bug planted and a test caught it: connector and router guard, both agent
+handlers, websocket identity, mobile device user, router delete and rule scoping, tool
+filter and MCP filter, every `validApiKey` check (expiry, suspended owner, legacy
+refusal, role table and its admin-only default, workspace scope list and single,
+membership), body `userId` (thread create and chat), own-threads scope, daily limit,
+chat owner, `teamRoleValid` (team match and role), lead add rules, last-lead guard
+(`force`), team workspace visibility, lead workspace fields, preset precedence and edit
+rights, team variables, tool sharing.
+
+| Acceptance criterion | Result | Evidence |
+|---|---|---|
+| 1 no policy = unchanged | passed | full suite; one test mock added (above) |
+| 2 allowed models in web, agent, API, OpenAI | passed | `connectorEnforcement.test.js`, `agentEnforcement.test.js`; Telegram is single-user only |
+| 3 policy router, disallowed routed model never called | passed | `connectorEnforcement.test.js` |
+| 4 default-owner key: no admin routes, own workspaces, `workspace_ids` | passed | `scopedApiKeys.test.js` |
+| 5 expired keys, suspended owners refused | passed | `scopedApiKeys.test.js` |
+| 6 API chats under the owner and daily limit | passed | `scopedApiKeys.test.js` |
+| 7 role default denies an MCP server | passed | `agentToolFiltering.test.js` (web and API agents; Telegram single-user) |
+| 8 no rules = today's tools | passed | `agentToolFiltering.test.js` |
+| 22 websocket, thread `userId`, mobile | passed | `agentWebsocketAuth.test.js`, `scopedApiKeys.test.js`, `mobile/deviceUser.test.js` |
+| 23 ownerless keys refused | passed (at once, decision 24) | `scopedApiKeys.test.js` |
+| 26 router can't be deleted out from under a policy | passed (unbind and fall back) | `modelRouterBinding.test.js` |
+| 29 only admin keys manage MCP servers | passed | `scopedApiKeys.test.js` |
+| 31 team policy, own policy wins | passed | `teams.test.js` |
+| 32 shared skill only for that team | passed | `teams.test.js` (rule level; every agent channel uses `agentToolAccessForUser`) |
+| 33 leads manage only their team, all logged | passed | `teams.test.js` |
+| 34 no teams = unchanged | passed | `teams.test.js`, full suite |
+| 35–38 scheduled jobs | not in this PR | decision 33 |
 
 Revised 2026-11-10 against the repo map (`docs/repo-map/`) and the state-machine audit
 (`docs/repo-map/12-state-machines.md` on branch `claude/state-machine-audit-23070d`). The
@@ -19,7 +139,13 @@ each account:
 3. which workspaces its API keys can reach;
 4. which agent skills, agent flows, imported plugins and MCP servers or tools it may use,
    with a default for each role and an optional per-account override;
-5. (phase 2) how many tokens, or how much spend, it may use.
+5. (phase 2) how many tokens, or how much spend, it may use;
+6. which scheduled agent jobs it may run, in which workspace, and which of their tools
+   may run unattended;
+7. which team it belongs to. A team gives its members a shared access policy, shared
+   workspaces, shared slash commands and prompt variables, and a set of skills and flows
+   only that team is offered. A team lead manages the team's members and workspaces
+   without being an instance-wide manager.
 
 People sign in with their Google account, and Google is the identity provider for the
 instance.
@@ -144,8 +270,9 @@ Changes to existing tables:
 - `api_keys.expiresAt DateTime?`
 - `api_keys.lastUsedAt DateTime?`
 
-Policies are reusable, so they serve as groups. Real groups and teams (option F) stay out
-of scope.
+Policies are reusable, so on their own they act as account types. Teams, which add
+membership, team-owned workspaces and presets, and scoped team leads on top of policies,
+are designed in "Teams" below.
 
 ### Policy module: `server/utils/accessPolicy/index.js` (new)
 
@@ -196,9 +323,10 @@ Entries use the names the agent code already uses:
 **Where rules come from,** first match wins:
 
 1. the user's access policy, when its `agent_tools` isn't null;
-2. the user's role default, from a new system setting `agent_tool_role_policy`
+2. their team's policy, when it has `agent_tools` (see "Teams");
+3. the user's role default, from a new system setting `agent_tool_role_policy`
    (`{ "manager": <rule>, "default": <rule> }`; no entry for a role means no restriction);
-3. no restriction, which is today's behavior.
+4. no restriction, which is today's behavior.
 
 Requests with no user (single-user mode, legacy API keys) and admins without a policy get
 every tool, as now. An MCP server can also carry `anythingllm.allowedRoles: [...]` in its
@@ -217,7 +345,7 @@ above, so the restriction can live with the server.
 |---|---|---|
 | Web agent tool list | `WORKSPACE_AGENT.getDefinition` in `utils/agents/defaults.js:72` | Run `functions` through `filterAgentFunctions`; the user is already passed in. |
 | API and Telegram agent tool list | `EphemeralAgentHandler.#loadAgents` in `utils/agents/ephemeral.js:426` | Today this builds its own copy of the same list. Replace the copy with the filtered list from `getDefinition`, so the two can't drift apart. |
-| Scheduled job tool overrides | `ephemeral.js:601` (`toolOverrides`) | No per-user filter: scheduled jobs only run in single-user mode (routes use `isSingleUserMode`, `server/endpoints/scheduledJobs.js:20`; timers stop once multi-user is on, `server/utils/BackgroundWorkers/index.js:401-405`), so there is no job owner or policy. Their automatic tool approval (`run-scheduled-job.js:77-83`) is handled by HIPAA mode instead (see "Compliance hardening"). |
+| Scheduled job tool overrides | `ephemeral.js:601` (`toolOverrides`) | Today jobs only run in single-user mode, with no owner. With "Scheduled jobs in multi-user mode", the job's tools are filtered against the owner's rule at every run, and only `approved_tools` run unattended. |
 | Attaching each plugin (defense in depth, and per-tool MCP) | `#attachPluginByName` in `utils/agents/index.js:620` and the MCP branch in `ephemeral.js:332` | Re-check each entry before attaching. After an MCP server is split into its tools, drop any tool that `isMcpToolAllowed` rejects. |
 | Turning a tool on mid-chat | `#toggleAgentTool` in `utils/agents/index.js:760` | Already admin-only. Still run the check, so an admin's own policy applies. |
 | Listing tools in the UI | the endpoints that return the agent skill and MCP lists the chat UI shows | Return only the tools the user may use, so hidden tools aren't advertised. |
@@ -259,6 +387,243 @@ on its own side too.
 - **Key management:** `POST /admin/generate-api-key` (`endpoints/admin.js:524`) and
   `/system/generate-api-key` (`endpoints/system.js:1065`) accept `userId`,
   `workspaceIds` and `expiresAt`. `GET /admin/api-keys` returns the owner and scope.
+
+### Teams
+
+**What exists today.** There are no teams or groups. The schema has users, three fixed
+roles and workspace membership (`workspace_users`). Admins and managers see every
+workspace (`server/models/workspace.js:294`); managers manage every user. Skills, agent
+flows, imported plugins and MCP servers are installed once for the whole instance
+(`storage/plugins/agent-skills`, `storage/plugins/agent-flows`, the MCP config), and
+installing them is admin-only (`server/endpoints/agentFlows.js`,
+`server/endpoints/communityHub.js`). Slash command presets belong to one user
+(`slash_command_presets.uid`), and system prompt variables are accidentally global
+(F-18). So a skill can be given to everyone or no one, and nothing can be shared with
+"my team".
+
+**Model.** A team is a named set of users with:
+
+- an access policy that applies to every member (models, router, agents, tool rule,
+  guardrail profile), so the policy is the team's "account type";
+- workspaces it owns, which every member can open;
+- slash command presets and prompt variables shared with its members;
+- one or more leads, who manage the team without being instance-wide managers.
+
+Skills and flows stay installed once for the instance, because they are code and files.
+"Sharing a skill with a team" means adding it to the team policy's `agent_tools.allow`
+list, and leaving it out of the role default, so only that team is offered it. Installing
+a skill stays admin-only.
+
+**Data model** (same migration rules as above: nullable columns, plain integer ids):
+
+| table / column | type | meaning |
+|---|---|---|
+| `teams.id` | Int PK | |
+| `teams.name` | String, unique | e.g. `clinical-ops` |
+| `teams.description` | String? | |
+| `teams.policy_id` | Int? | the team's access policy; null means members fall back to their own policy or role default |
+| `teams.idp_group` | String?, unique | a Google Group email, for group sync later (see "Google sign-in") |
+| `teams.created_by`, `createdAt`, `lastUpdatedAt` | | |
+| `team_members.team_id`, `team_members.user_id` | Int | unique on `(team_id, user_id)`; v1 also unique on `user_id` (one team per user, open decision 28) |
+| `team_members.role` | String, default `member` | `member` or `lead` |
+| `team_members.added_by`, `createdAt` | | |
+| `workspaces.team_id` | Int? | owning team; null means today's behavior |
+| `slash_command_presets.team_id` | Int? | shared with the team when set |
+| `system_prompt_variables.team_id` | Int? | shared with the team when set (with platform fix 6 making user variables per user) |
+
+**Policy resolution.** `getPolicyForUser(user)` resolves in this order: the user's own
+`policy_id` (a per-person exception), then their team's `policy_id`, then none (today's
+behavior). The tool rule order in "Agent skill and MCP restrictions" becomes: user policy,
+team policy, role default, none. Membership is read per request, like role and
+suspension, so adding or removing someone takes effect on their next request.
+
+**Workspace access.**
+
+- `Workspace.getWithUser` and `whereWithUser` (`server/models/workspace.js:294`, `:415`)
+  also match workspaces where `team_id` is the user's team, in addition to
+  `workspace_users`.
+- A team lead can create workspaces owned by their team, add or remove team members on
+  those workspaces, and edit their settings within what the team policy allows.
+- Admins keep access to everything. Whether managers keep instance-wide access once teams
+  exist is open decision 29; the proposal is yes for now, so nothing changes for existing
+  installs.
+- Moving a workspace between teams, or detaching it, is admin-only.
+
+**Team leads.**
+
+- New middleware `teamRoleValid(["lead"], { teamFrom })` in
+  `server/utils/middleware/teamProtected.js`. It loads the caller's membership and checks
+  that the team in the request (route param, or the workspace's `team_id`) is theirs.
+  Admins pass.
+- Leads can:
+  - add existing users with the `default` role to their team, or remove them;
+  - make another member a lead;
+  - manage team workspaces, presets and variables;
+  - view the team's usage and guardrail events.
+- Leads can't change anyone's role, policy or suspension, edit the team's policy, create
+  users or invites outside the team flow, or see other teams.
+- Every lead action writes an event (`team_member_added`, `team_member_removed`,
+  `team_lead_changed`, `team_workspace_created`), with the actor and the team.
+- A team can't be left with no lead while it has members, unless an admin does it.
+  Enforce this in a transaction with a conditional write, the same pattern as the
+  last-admin guard (SMF-13).
+
+**Sharing.**
+
+- Presets and variables: a "Share with my team" toggle sets `team_id`. Members see shared
+  items next to their own; only the owner, a lead or an admin can edit them. The preset
+  unique key becomes `(uid, team_id, command)`, so a personal command can shadow a team
+  one; personal wins.
+- Skills, flows, MCP tools: on the agent skills page, an admin picks which teams are
+  offered each item. This writes the team policies' `allow` lists. A team with no policy
+  gets one created for it.
+- Community Hub: unchanged and admin-only. Private hub items imported by an admin can
+  then be shared with a team as above.
+
+**Google Groups.** `teams.idp_group` links a team to a Google Group. Phase 1 stores it
+and shows it, but doesn't sync. The follow-up (open decision 9) reads group membership at
+each sign-in through the Directory API, and sets the user's team from the first matching
+group. A user removed from the group drops out of the team at their next sign-in.
+
+**Deleting a team.**
+
+- Members fall back to their own policy or role default.
+- Team workspaces become admin-only: `team_id` is set to null, and nobody else has
+  `workspace_users` rows for them unless they were added directly. Open decision 30
+  covers this.
+- Shared presets and variables go back to their owners.
+- One `team_deleted` event lists the counts.
+- Everything runs in one transaction.
+
+**Enforcement points:**
+
+| Path | File | Change |
+|---|---|---|
+| Policy lookup | `server/utils/accessPolicy/index.js` | Resolve user policy, then team policy |
+| Tool filter | `server/utils/accessPolicy/agentTools.js` | Add the team step to the rule order |
+| Workspace reads and lists | `server/models/workspace.js` (`getWithUser`, `whereWithUser`) | Match team workspaces |
+| Workspace and member management | `server/endpoints/workspaces.js`, `server/endpoints/admin.js` (workspace members) | Allow leads on their team's workspaces through `teamRoleValid` |
+| Presets and variables | `server/endpoints/system.js:1302-1401`, `server/models/systemPromptVariables.js` | Return own plus team items; edit rights for owner, lead, admin |
+| Developer API | scoped keys from "Scoped API keys" | An owned key reaches its owner's team workspaces too, narrowed by `workspace_ids` |
+| Chat log viewer | `server/endpoints/system.js` chat export and list | Leads see their team's workspace chats only if open decision 31 allows it; every view is logged (Compliance hardening item 5) |
+
+**Teams in HIPAA mode.** Team boundaries are a "minimum necessary" control: in HIPAA
+mode, managers lose instance-wide workspace access, and work through team membership
+like everyone else.
+
+### Scheduled jobs in multi-user mode
+
+**What exists today.**
+- **Single-user only.** Scheduled jobs work only in single-user mode. Their routes use
+  `isSingleUserMode` (`server/endpoints/scheduledJobs.js:20`), and timers registered
+  before a switch to multi-user stop at their next fire
+  (`server/utils/BackgroundWorkers/index.js:401-405`).
+- **What a job is:** a name, a prompt, a cron schedule and an optional tool list
+  (`scheduled_jobs`, `server/prisma/schema.prisma:403`).
+- **How a run works.** Each run starts an `EphemeralAgentHandler` with no workspace and no
+  user (`server/jobs/run-scheduled-job.js:61-74`), so it uses the system model and can't
+  search any workspace's documents. Every tool approval is granted automatically
+  (`:76-83`, F-24). Results go to `scheduled_job_runs`, and a browser push shows the start
+  of the reply.
+- **Limits:** a 5-minute timeout (`SCHEDULED_JOB_TIMEOUT_MS`) and one run at a time
+  (`SCHEDULED_JOB_MAX_CONCURRENT`).
+- **Open audit findings:** a run can hang before its timeout (SMF-24), and it's unknown
+  whether two `ScheduledJobRun.start` calls can both insert (SMF-36). A worker killed by a
+  signal was recorded as a success (SMF-05, fixed on the audit branch).
+
+Lifting the single-user guard alone would give every user unattended agents that approve
+their own tool calls. The design below makes each job run as a person, under that
+person's rules, with approvals decided ahead of time by a human.
+
+**Ownership.** New nullable columns on `scheduled_jobs`:
+
+| column | type | meaning |
+|---|---|---|
+| `user_id` | Int? | owner; null only for jobs created in single-user mode |
+| `workspace_id` | Int? | the workspace the job runs in; its documents, system prompt and model apply |
+| `thread_id` | Int? | optional thread the results are posted to |
+| `approved_tools` | String? (JSON) | tools pre-approved for unattended use (below) |
+| `approved_by` | Int?, `approved_at` | who approved them and when |
+| `notify` | String, default `push` | `push`, `none`, or `thread` |
+
+`scheduled_job_runs` gains `user_id` (copied at run time), so runs can be filtered and
+audited without joining.
+
+**Running as the owner.** `run-scheduled-job.js` passes `workspace` and `userId` to
+`EphemeralAgentHandler` (both are already constructor parameters,
+`server/utils/agents/ephemeral.js:59-89`). Before each run, the runner checks:
+
+- the owner exists, isn't suspended, and still has access to the workspace (through
+  `workspace_users` or their team), or the run fails with `owner_lost_access`;
+- the owner's policy allows agents, and the workspace's model passes
+  `resolveAllowedSelection`;
+- the owner is within `dailyMessageLimit` and, once budgets exist, their budget.
+
+The job's tool list is run through `filterAgentFunctions` with the owner's tool rule, at
+run time and not only when the job is saved. So a policy or team change takes effect on the
+next run.
+
+**Approvals.** Automatic approval is removed in multi-user mode:
+
+- A tool with side effects runs unattended only when it is in `approved_tools`. Anything
+  else is **refused**, not approved; the refusal is recorded in the run, and the agent is
+  told the tool isn't available.
+- **Who may approve:**
+  - the owner may approve tools their policy allows them to self-approve
+    (`allow_self_approval`, see "Guardrails");
+  - otherwise a team lead or an admin approves, from the job's page.
+  - Editing the prompt, workspace or tool list clears `approved_tools`, so a changed job
+    needs approving again.
+- **The create-scheduled-job skill** can create a job owned by the chatting user. It can
+  never set `approved_tools`: approval only happens in the UI, so a planted instruction in
+  a document or web page can't create a job that approves itself.
+- Single-user mode keeps today's behavior (automatic approval), with a warning on the
+  jobs page. HIPAA mode forces multi-user, so automatic approval is never used there.
+
+**Visibility.**
+- Owners see and manage their own jobs and runs.
+- Team leads see their team's jobs.
+- Admins see all of them.
+- Results and generated files are served only to those people. Generated files follow
+  platform fix 7 (authorized by owner).
+- With `notify: thread`, results are posted to `thread_id` as a chat from the owner's
+  workspace, so they appear in normal chat history and in retention and deletion.
+
+**Limits.**
+- New policy fields: `max_scheduled_jobs` (default 5), `min_job_interval_minutes`
+  (default 60, which rejects cron expressions that fire more often), and an optional cap
+  on runs per day.
+- Concurrency stays global (`SCHEDULED_JOB_MAX_CONCURRENT`), with a fair queue so one user's
+  jobs can't hold all slots.
+- The 5-minute timeout stays.
+- The parent process watches each run and kills it by run id, which fixes SMF-24 (audit
+  issue 6).
+- A unique partial index or conditional insert guarantees one running run per job (SMF-36).
+
+**Audit and deletion.**
+- New events `scheduled_job_created`, `scheduled_job_approved`, `scheduled_job_run`
+  (status, tools used, refused tools) and `scheduled_job_deleted`, with actor and owner.
+- Deleting a user, or removing them from a workspace, disables their jobs. A
+  `dataDeletion.forUser` run (Compliance hardening item 7) deletes their jobs and runs.
+- Run results count as chat data for retention.
+
+**Notifications.** In HIPAA mode, push carries only the job name and status, never reply
+text. This replaces the excerpt sent by `server/jobs/helpers/scheduled-job-helper.js`.
+
+**Switching to multi-user mode.** Jobs created in single-user mode have no owner. When
+multi-user is turned on, the migration in `enable-multi-user` assigns them to the first
+admin, the same as other single-user rows, and clears `approved_tools`. They then stay
+disabled until an admin reviews and approves them.
+
+**Enforcement points:**
+
+| Path | File | Change |
+|---|---|---|
+| Job routes | `server/endpoints/scheduledJobs.js` | Replace `isSingleUserMode` with `validatedRequest` plus owner, lead or admin checks; a separate approval endpoint |
+| Timer registration | `server/utils/BackgroundWorkers/index.js:394-428` | Drop the multi-user stop; check owner status before enqueueing |
+| Run | `server/jobs/run-scheduled-job.js` | Pass owner and workspace; filter tools; replace auto-approve with the `approved_tools` check; record refusals |
+| Agent skill | `server/utils/agents/aibitat/plugins/create-scheduled-job/` | Set owner and workspace; never set approvals; respect policy limits |
+| Push | `server/jobs/helpers/scheduled-job-helper.js` | HIPAA-mode payload without reply text |
 
 ### Google sign-in
 
@@ -334,8 +699,9 @@ reassigned. `users` has no email column, so the identity row holds it.
 Phase 1 keeps roles and policies managed in AnythingLLM. Accounts created automatically
 get the defaults, and admins adjust them afterwards. Mapping Google Groups to roles and
 policies needs the Google Admin SDK Directory API (or the Cloud Identity Groups API) with
-a service account. That is listed as a follow-up: a `idp_group_mappings` table (group
-email → role and policy), re-evaluated at each sign-in.
+a service account. That is listed as a follow-up. It uses `teams.idp_group` (see
+"Teams"), so a Google Group maps to a team, and through the team to a policy. Membership
+is re-evaluated at each sign-in. Roles stay managed in AnythingLLM.
 
 **Sessions.** Session JWTs last 30 days, so turning off someone's Google account doesn't
 sign them out of AnythingLLM. Sessions created through OIDC therefore get a shorter
@@ -543,6 +909,11 @@ Each item below matches one of the nine gaps at the end of the review.
 
 **5. Access logging and an auditor role.**
 
+The audit event format, writer and full event catalogue are in
+`PLAN-audit-logging-and-compliance.md`, which takes over the logging parts of items 5,
+6 and 9. The bullets below stay as the controls this plan builds; their events use that
+plan's catalogue names.
+
 - New events: `chat_viewed` (an admin or manager opening another user's chats),
   `chats_exported` (with filters and row count), `workspace_opened`, `document_viewed`,
   `document_downloaded`, `generated_file_downloaded`, `memory_viewed`,
@@ -553,7 +924,8 @@ Each item below matches one of the nine gaps at the end of the review.
   grants it to specific users through the `auditor` role. That follows the "minimum
   necessary" rule.
 
-**6. Tamper-evident audit log.**
+**6. Tamper-evident audit log.** Built in `PLAN-audit-logging-and-compliance.md` PR B
+(hash chain, verification, retention, forwarding). Kept here for reference:
 
 - Add `prev_hash` and `hash` columns to `event_logs` and `guardrail_events`. Each row's
   hash covers its content and the previous row's hash, so an edit or deletion breaks the
@@ -604,9 +976,10 @@ fixed.
   first boot rather than converting a single-user one: `POST /system/enable-multi-user`
   is open to anyone on an instance without a password (F-07), and its failure path
   deletes every user (SMF-09, audit issue 3).
-- **Single-user installs:** scheduled jobs approve every tool call automatically
-  (`run-scheduled-job.js:77-83`). HIPAA mode forces multi-user, which turns scheduled
-  jobs off, so no separate rule is needed.
+- **Scheduled jobs:** in single-user mode they approve every tool call automatically
+  (`run-scheduled-job.js:77-83`). HIPAA mode forces multi-user, where jobs run as their
+  owner and only pre-approved tools run unattended (see "Scheduled jobs in multi-user
+  mode"). Push notifications carry no reply text.
 - **Memory extraction** can mark chats as processed after a failed extraction (SMF-22),
   so memories don't match the chats they came from. This is one more reason it's off by
   default in HIPAA mode.
@@ -620,7 +993,8 @@ fixed.
 - **Defaults:** guardrail input checks on, with PII and secret rules on `log`, so admins
   can tune them before switching to `block`.
 
-**9. Log settings changes.**
+**9. Log settings changes.** Built in `PLAN-audit-logging-and-compliance.md` PR A
+(`settings.changed`, `vendor.changed`). Kept here for reference:
 
 - Wrap `updateENV` and the `SystemSettings` update functions so every change writes a
   `settings_changed` event with the user, the key, and the old and new values. Secrets
@@ -724,6 +1098,22 @@ fit a feature section, so they're listed here and each is placed in an existing 
 - Chat UI: show the new "model not allowed" and "agents disabled for your account"
   errors the same way the daily-limit error is shown today.
 - Add a sidebar entry and route guard for the new page next to Model Routers.
+- New page `frontend/src/pages/GeneralSettings/Teams/`: list teams; create, rename and
+  delete them (admin); pick the team's policy and Google Group (admin). Members and leads
+  are managed on the same page by admins and by that team's leads, with an "add existing
+  user" picker limited to `default`-role users with no team.
+- Users page: a team column and a team picker (admin).
+- Workspace settings: an "Owning team" field (admin), and team leads see the members tab
+  for their team's workspaces.
+- Agent skills page: a "Teams" picker on each skill, flow and MCP server, writing the team
+  policies' allow lists (admin).
+- Slash command and prompt variable editors: a "Share with my team" toggle.
+- Sidebar: team workspaces grouped under the team name.
+- Scheduled jobs page (`frontend/src/pages/GeneralSettings/ScheduledJobs/`): available in multi-user mode, showing the caller's own jobs (a team or all
+  tab for leads and admins), a workspace picker, an "Approvals" panel listing tools that
+  need approval with who approved them, and refused tool calls in each run's detail.
+- The frontend gates on the role string in `localStorage` (F-13), so every lead action
+  must be enforced by `teamRoleValid` on the server; the UI only hides controls.
 
 ### Phase 2 (separate PR, optional): usage budgets
 
@@ -775,6 +1165,39 @@ One PR for phase 1, built as committed subsets in this order:
 7. Documentation: the Swagger descriptions for the changed key endpoints, and a short
    admin guide that covers tool rules and `anythingllm.allowedRoles`.
 
+**Teams** (proposed: in the access policy PR after step 5, open decision 32), built in this
+order:
+
+1. Migration for `teams`, `team_members` and the `team_id` columns; the `Team` model with
+   the one-lead-left guard and the transactional delete; unit tests.
+2. Team step in `getPolicyForUser` and the tool rule order; team workspaces in
+   `getWithUser` and `whereWithUser`; tests.
+3. `teamRoleValid` and the lead endpoints (members, leads, team workspaces), with event
+   logs; tests.
+4. Shared presets and variables (after platform fix 6), and per-team skill sharing on the
+   agent skills page.
+5. Frontend: Teams page, team fields on users and workspaces, sharing toggles, sidebar
+   grouping.
+6. Documentation: setting up teams, what leads can and can't do, and how to share a
+   skill with one team.
+
+**Scheduled jobs in multi-user mode as their own PR** (proposed, open decision 33), after
+the access policy PR, since it needs policies, teams and the tool filter. It also needs
+the audit branch's SMF-05 fix. Built in this order:
+
+1. Migration for the new `scheduled_jobs` and `scheduled_job_runs` columns; ownership,
+   and the single-user to multi-user migration of existing jobs; tests.
+2. Routes with owner, lead and admin checks; the approval endpoint; policy limits.
+3. Runner: run as the owner in the workspace, run-time tool filtering, `approved_tools`
+   in place of automatic approval, refusals recorded; the run watchdog (SMF-24) and one
+   running run per job (SMF-36).
+4. The create-scheduled-job skill: owner and workspace, never approvals.
+5. Frontend: jobs page per user, approval panel for owners, leads and admins, team view.
+6. Audit events, deletion hooks and the HIPAA-mode push payload.
+
+Teams need policies (steps 1–2 of the access policy PR) and scoped API keys for the API
+path. Google Group sync is a later follow-up and isn't in this PR.
+
 Step 3 doesn't depend on step 4, so it could ship as its own PR if you'd rather keep the
 change smaller (open decision 5).
 
@@ -817,8 +1240,8 @@ per-owner API agent whitelists do, so if guardrails merge first, those pieces wa
    they go first. If you'd rather not wait for this PR, they can ship alone (open
    decision 26).
 1. Audit issue 4 (validate settings before applying any, atomic `.env` write) with
-   platform fix 11, then settings change logging, access logging (with platform fixes 12
-   and 14), and the `auditor` role.
+   platform fix 11, then the `auditor` role and platform fix 12. Settings change
+   logging, access logging and platform fix 14 move to the audit plan's PR A.
 2. Login rate limiting and lockout; narrowed CORS.
 3. Credential encryption with `STORAGE_ENCRYPTION_KEY`, and the migration of existing
    values; the collector channel and connector-token copies (platform fixes 4 and 5); the
@@ -826,7 +1249,8 @@ per-owner API agent whitelists do, so if guardrails merge first, those pieces wa
    prompt variables, generated files by owner, no memory text in logs, and no web search
    fallback (platform fixes 6, 7, 10 and 13).
 4. `dataDeletion` and the deletion reports.
-5. Tamper-evident hashes on audit tables, the verify endpoint, and forwarding.
+5. (Moved to the audit plan's PR B: tamper-evident hashes, the verify endpoint and
+   forwarding.)
 6. Audit issue 3 (safe enable-multi-user), then HIPAA mode, the vendor BAA register, and
    the Compliance status page.
 7. Sessions: `user_sessions`, idle timeout, revocation, and the move to an `HttpOnly`
@@ -837,8 +1261,9 @@ breaking something. It's last so the other steps aren't held up, and it could be
 separate PR (open decision 17). HIPAA mode needs the access policy and guardrails PRs for
 its tool and guardrail defaults; if it merges first, those defaults are added later.
 
-That gives up to five PRs in all, or six if sessions are split out: access policies,
-Google sign-in, guardrails, compliance hardening, and optional budgets. None are stacked
+That gives six PRs in all: access policies (with teams by default), Google sign-in,
+scheduled jobs in multi-user mode, guardrails, compliance hardening, and optional
+budgets. Splitting out sessions or teams adds one each. None are stacked
 on each other. The audit PR (`claude/state-machine-audit-23070d`) is separate and should
 merge first; the open audit issues land as the first commits of the PR that needs them,
 as listed above, so they don't add PRs.
@@ -876,6 +1301,45 @@ Existing suites to extend live in `server/__tests__/`:
 - A new middleware test for `validApiKey` and `apiKeyRoleValid`: expired keys, suspended
   owners, a non-admin owner on admin routes, legacy keys before and after
   `LEGACY_API_KEYS_UNTIL`, a legacy key trying to create a key.
+
+For teams (new `models/team.test.js`, `utils/middleware/teamProtected.test.js`, and
+additions to the policy, tool filter and workspace tests):
+
+- Policy order: user policy beats team policy beats role default beats none; removing a
+  user from a team changes their policy on the next request.
+- A member opens a team workspace with no `workspace_users` row; a non-member gets 404;
+  admins see everything; managers follow decision 29.
+- A lead adds and removes members of their own team, and gets 403 on another team, on
+  role or policy changes, and on moving a workspace between teams.
+- The last lead of a team with members can't be removed or demoted, including two
+  concurrent removals (in-memory Prisma fake with real `updateMany` counts).
+- A skill shared with team A is offered to A's members in the web agent, the API agent
+  and Telegram, and not to team B.
+- A shared preset is visible to the team and editable only by its owner, a lead or an
+  admin; a personal preset with the same command wins for its owner.
+- Deleting a team runs in one transaction, and leaves members on their fallback policy
+  and workspaces admin-only.
+- Every lead action writes an event with the actor and team.
+
+For scheduled jobs in multi-user mode (additions to `jobs/run-scheduled-job` and
+`endpoints/scheduledJobs` tests, with the agent and LLM faked):
+
+- A run uses the owner's workspace, model and filtered tools; a tool the owner's policy
+  denies isn't loaded even if the job lists it.
+- A side-effecting tool not in `approved_tools` is refused and recorded, never approved;
+  an approved one runs.
+- Editing the prompt, workspace or tools clears `approved_tools`.
+- The create-scheduled-job skill can't set approvals, even when the prompt asks it to.
+- A suspended owner, an owner removed from the workspace, or a policy with agents off
+  makes the run fail with the right status and no tool call.
+- A user can't see or edit another user's jobs; a lead sees their team's; an admin sees
+  all.
+- `max_scheduled_jobs` and `min_job_interval_minutes` are enforced, including two
+  concurrent creates.
+- Switching to multi-user assigns existing jobs to the first admin, disabled with no
+  approvals.
+- In HIPAA mode the push payload has no reply text.
+- Two concurrent starts of one job leave one running run.
 
 For Google sign-in (new `utils/auth/oidc.test.js` and an endpoint test, with Google's
 token endpoint and keys mocked):
@@ -1012,6 +1476,19 @@ agent path) and confirm a test fails.
 29. Only an admin-owned API key or an admin session can add or change an MCP server.
 30. Provider keys and connector tokens appear only where they're stored, encrypted, and
     never in collector requests, document files or vector rows.
+31. A user added to a team gets the team's models, tools and workspaces on their next
+    request, with no other change; a user with their own policy keeps it.
+32. A skill shared with one team is never offered to users outside it, in any agent
+    channel.
+33. A team lead can manage their own team's members and workspaces and nothing else, and
+    every lead action is in the event log.
+34. With no teams created, every user, workspace, preset and tool behaves as before.
+35. In multi-user mode, a scheduled job runs as its owner in its workspace, with the
+    owner's model and tool rules, and stops running when the owner loses access.
+36. No scheduled job in multi-user mode ever runs a side-effecting tool that a person
+    didn't approve for that job, and an agent can't approve tools for a job.
+37. Users see only their own jobs and runs, leads their team's, admins all.
+38. Single-user installs keep today's scheduled job behavior.
 
 ## Risks
 
@@ -1025,6 +1502,12 @@ agent path) and confirm a test fails.
   machines. The audit found most existing bugs in check-then-write code and in writes
   spread across several stores. Use conditional writes and transactions from the start,
   and test two concurrent calls for each claim or limit.
+- **Team workspaces widen access.** Matching on `team_id` in `getWithUser` gives every
+  member every team workspace. A workspace holding data only some members should see must
+  stay out of the team (no `team_id`) and use direct membership. Say so in the Teams page
+  and docs, and log `team_workspace_created`.
+- **Three sources of a user's access** (own policy, team policy, role) can confuse admins.
+  The Users page shows the effective policy and where it came from.
 - **The audit branch and this branch both add `docs/repo-map/`.** Merge the audit PR
   first and drop this branch's untracked copy of the map.
 - **Caching:** `utils/router` caches router config. A policy change has to invalidate the
@@ -1078,8 +1561,9 @@ agent path) and confirm a test fails.
 7. Google sign-in: its own PR (proposed), or part of the access policy PR?
 8. New Google users: invite-only (proposed), or created automatically for anyone in the
    allowed domains?
-9. Should Google Groups decide roles and policies? That needs a Google Workspace service
-   account with Directory API access, and is proposed as a follow-up.
+9. Should Google Groups decide team membership (and through it, policies)? That needs a
+   Google Workspace service account with Directory API access, and is proposed as a
+   follow-up; `teams.idp_group` is stored from the start.
 10. Generic OIDC with Google as the first provider (proposed), or Google only?
 11. Guardrails: their own PR (proposed), or part of the access policy PR?
 12. Which moderation service first: local `ollama-guard` (proposed, keeps data in
@@ -1113,6 +1597,25 @@ agent path) and confirm a test fails.
     PR of their own that can merge sooner?
 27. Connector tokens already copied into vector rows: re-write them on the next sync
     (proposed), or require a one-off re-embed before HIPAA mode can be turned on?
+28. Teams per user: one team per user in v1 (proposed; policy resolution stays simple),
+    or several teams, with workspace access from all of them and the policy from a
+    chosen primary team?
+29. Once teams exist, do managers keep instance-wide workspace and user access (proposed
+    outside HIPAA mode), or are they limited to teams they lead?
+30. When a team is deleted, its workspaces: become admin-only (proposed), stay visible to
+    former members through `workspace_users` rows created at deletion, or are blocked
+    from deletion while the team owns workspaces?
+31. Can team leads read their team members' chats in team workspaces (with every view
+    logged), or only admins and auditors (proposed in HIPAA mode)?
+32. Teams: inside the access policy PR (proposed), or a PR of their own after it?
+33. Scheduled jobs in multi-user mode: their own PR after access policies (proposed), or
+    folded into the access policy PR?
+34. Who approves unattended tools for a job: the owner when their policy allows
+    self-approval, otherwise a lead or admin (proposed); or always an admin?
+35. Default job limits per policy: 5 jobs and a 60-minute minimum interval (proposed), or
+    other values?
+36. Single-user jobs on switching to multi-user: assigned to the first admin and disabled
+    until reviewed (proposed), or deleted?
 
 ## Considered and left out
 
@@ -1120,7 +1623,13 @@ agent path) and confirm a test fails.
   redundant once a policy can carry its own `router_id`, and it only works when the
   provider is `anythingllm-router`.
 - **Roles per workspace** (a role column on `workspace_users`). Useful, but separate from
-  model access.
+  model access. Team leads cover the common case of someone managing a group's
+  workspaces.
+- **Installing skills per team.** Skills, flows and plugins stay installed once for the
+  instance and are shared with teams through policy allow lists. Per-team install folders
+  would mean loading third-party code per team, with no benefit for access control.
+- **Nested teams.** Teams are flat; a department with sub-teams uses separate teams and
+  policies.
 - **Tool rules per workspace.** Rules attach to users and roles, not workspaces. Could be
   added later as a third source in the rule order.
 - **SAML.** Google Workspace also supports SAML, but OIDC is simpler and fits the existing
