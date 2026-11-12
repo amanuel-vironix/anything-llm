@@ -283,18 +283,24 @@ const LEGACY_EVENT_MAP = {
     targetId: m.workspaceId,
     metadata: { changedFields: m.changedFields },
   }),
-  // A workspace moved between teams: {workspaceId, fromTeamId, toTeamId}
-  workspace_team_changed: (m) => ({
-    action: "workspace.updated",
-    teamId: m.toTeamId,
-    workspaceId: m.workspaceId,
-    targetType: "workspace",
-    targetId: m.workspaceId,
-    metadata: {
-      changedFields: ["team_id"],
-      changes: { team_id: { from: m.fromTeamId, to: m.toTeamId } },
-    },
-  }),
+  // A workspace moved between teams: {workspaceId, fromTeamId, toTeamId},
+  // or {workspaceId, slug, teamId, previousTeamId}.
+  workspace_team_changed: (m) => {
+    const to = m.toTeamId ?? m.teamId ?? null;
+    const from = m.fromTeamId ?? m.previousTeamId ?? null;
+    return {
+      action: "workspace.updated",
+      teamId: to,
+      workspaceId: m.workspaceId,
+      targetType: "workspace",
+      targetId: m.workspaceId,
+      metadata: {
+        slug: m.slug,
+        changedFields: ["team_id"],
+        changes: { team_id: { from, to } },
+      },
+    };
+  },
   model_router_deleted: (m) => ({
     action: "router.deleted",
     targetType: "router",

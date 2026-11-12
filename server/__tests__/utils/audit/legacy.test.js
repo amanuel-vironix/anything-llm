@@ -181,6 +181,21 @@ describe("EventLogs.logEvent wrapper", () => {
     jest.restoreAllMocks();
   });
 
+  it("reads either metadata shape for workspace_team_changed", async () => {
+    await EventLogs.logEvent(
+      "workspace_team_changed",
+      { workspaceId: 7, slug: "clinic", teamId: 3, previousTeamId: 2 },
+      1
+    );
+    const row = await prisma.audit_events.findFirst();
+    expect(row).toMatchObject({ workspace_id: 7, team_id: 3 });
+    expect(JSON.parse(row.metadata)).toEqual({
+      slug: "clinic",
+      changedFields: ["team_id"],
+      changes: { team_id: { from: 2, to: 3 } },
+    });
+  });
+
   it("records a workspace moving between teams with both team ids", async () => {
     await EventLogs.logEvent(
       "workspace_team_changed",

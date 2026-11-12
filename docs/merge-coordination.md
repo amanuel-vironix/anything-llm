@@ -148,3 +148,25 @@ AU won't edit these until the owning branch merges:
 - Will switch its `logEvent` calls to `audit.record` itself if the writer reaches
   `origin/master` while it still works on those files; otherwise they're AU's.
 - `PasswordRecovery` now logs `password_reset` instead of `user_updated` with empty changes.
+
+**AP route list, 2026-11-11** (to declare in `server/utils/audit/routes/` after AP merges;
+the coverage test rejects declarations for routes that don't exist yet):
+- `endpoints/accessPolicies.js` (strict admin): `POST /admin/access-policies/new`,
+  `POST /admin/access-policies/:id`, `DELETE /admin/access-policies/:id` → `policy.*`;
+  `POST /admin/users/:id/policy` → `policy.assigned`; `POST /admin/agent-tool-role-policy`
+  → `role_default.updated`; `POST /admin/agent-tool-sharing` → `policy.created|updated`.
+  The GETs read config only.
+- `endpoints/teams.js`: admin `POST /admin/teams/new`, `POST /admin/teams/:teamId`,
+  `DELETE /admin/teams/:teamId` → `team.*`; `POST /admin/workspaces/:slug/team` →
+  `workspace.updated` (`workspace_team_changed`). Lead or admin: `POST /teams/:teamId/members`,
+  `DELETE /teams/:teamId/members/:userId`, `POST /teams/:teamId/members/:userId/role` →
+  `team.member_*` / `team.lead_changed`; `POST /teams/:teamId/workspaces/new` →
+  `workspace.created`; `POST /teams/:teamId/workspaces/:slug/update` → `workspace.updated`.
+  `GET /team/mine`, `GET /teams/:teamId`, members, candidates and workspaces lists read only.
+- `admin.js`: new `POST /admin/api-keys/:id` → `api_key.updated`; `generate-api-key` takes
+  an owner, workspaces and expiry.
+- Changed: `system.js` key creation, presets (`shareWithTeam`, lead edits) and prompt
+  variables (now `flex[all]`, checked in the handler); model-router delete and rule
+  scoping; mobile pairing takes a `userId`; the agent socket checks the session; `/v1`
+  routes set `locals.user` to the key's owner.
+- AP's final branch leaves `endpoints/workspaces.js` untouched.
