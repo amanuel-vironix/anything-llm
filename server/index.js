@@ -66,6 +66,7 @@ if (
   );
 }
 app.use(cors({ origin: true }));
+app.use(require("./utils/audit").audit.middleware); // request id, channel, IP for audit rows
 // Embed endpoints are public-facing and only accept small payloads, so parse them
 // first with a tight limit. The global parsers below skip already-parsed bodies.
 app.use("/api/embed", [

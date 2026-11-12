@@ -2,7 +2,7 @@
 
 Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerate after changing a domain file (see README).
 
-259 paths across 8 domain files.
+260 paths across 8 domain files.
 
 ## [01-auth-and-users.md](01-auth-and-users.md)
 
@@ -249,6 +249,7 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-ADMIN-32](06-admin-system-and-runtime.md#p-admin-32-telemetry-emission-pipeline-and-catalogue) | Telemetry emission pipeline and catalogue |
 | [P-ADMIN-33](06-admin-system-and-runtime.md#p-admin-33-logging) | Logging |
 | [P-ADMIN-34](06-admin-system-and-runtime.md#p-admin-34-development-vector-db-debug-route) | Development vector DB debug route |
+| [P-ADMIN-35](06-admin-system-and-runtime.md#p-admin-35-audit-trail-writer-added-with-the-audit-logging-pr-a) | Audit trail writer (added with the audit-logging PR A) |
 
 ## [07-frontend-routes-and-flows.md](07-frontend-routes-and-flows.md)
 

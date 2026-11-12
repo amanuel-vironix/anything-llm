@@ -1,4 +1,4 @@
-const { EventLogs } = require("../../../models/eventLogs");
+const { audit } = require("../../../utils/audit");
 const { SystemSettings } = require("../../../models/systemSettings");
 const { purgeDocument } = require("../../../utils/files/purgeDocument");
 const { getVectorDbClass } = require("../../../utils/helpers");
@@ -205,9 +205,17 @@ function apiSystemEndpoints(app) {
           type,
           "workspace"
         );
-        await EventLogs.logEvent("exported_chats", {
-          type,
-        });
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.exported",
+              targetType: "chats",
+              metadata: { format: type, filter: "workspace" },
+            },
+            response
+          ))
+        )
+          return;
         response.setHeader("Content-Type", contentType);
         response.status(200).send(data);
       } catch (e) {
@@ -272,6 +280,17 @@ function apiSystemEndpoints(app) {
       try {
         const { names } = reqBody(request);
         for await (const name of names) await purgeDocument(name);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "document.deleted",
+              targetType: "document",
+              metadata: { count: names.length, docPaths: names },
+            },
+            response
+          ))
+        )
+          return;
         response
           .status(200)
           .json({ success: true, message: "Documents removed successfully" })

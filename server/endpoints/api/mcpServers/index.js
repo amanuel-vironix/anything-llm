@@ -1,5 +1,6 @@
 const MCPCompatibilityLayer = require("../../../utils/MCP");
 const { reqBody } = require("../../../utils/http");
+const { audit } = require("../../../utils/audit");
 const { validApiKey } = require("../../../utils/middleware/validApiKey");
 
 function apiMCPServerEndpoints(app) {
@@ -98,6 +99,23 @@ function apiMCPServerEndpoints(app) {
         config,
         { create: true }
       );
+      if (result.success) {
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "mcp.server_added",
+              targetType: "mcp_server",
+              targetId: name,
+              metadata: {
+                server: name,
+                transport: config?.url ? "http" : "stdio",
+              },
+            },
+            response
+          ))
+        )
+          return;
+      }
       response.status(result.success ? 200 : 400).json(result);
     } catch (e) {
       console.error(e.message, e);
@@ -197,6 +215,23 @@ function apiMCPServerEndpoints(app) {
           config,
           { create: false }
         );
+        if (result.success) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "mcp.server_updated",
+                targetType: "mcp_server",
+                targetId: name,
+                metadata: {
+                  server: name,
+                  changedFields: Object.keys(config || {}),
+                },
+              },
+              response
+            ))
+          )
+            return;
+        }
         response.status(result.success ? 200 : 400).json(result);
       } catch (e) {
         console.error(e.message, e);
@@ -236,8 +271,25 @@ function apiMCPServerEndpoints(app) {
       */
       try {
         const { name } = request.params;
-        const { success, error } =
-          await new MCPCompatibilityLayer().toggleServerStatus(name);
+        const mcp = new MCPCompatibilityLayer();
+        const { success, error } = await mcp.toggleServerStatus(name);
+        if (success) {
+          // MCPCompatibilityLayer is a singleton: after a successful toggle the
+          // server is in `mcps` only if it was started.
+          const started = Boolean(mcp.mcps?.[name]);
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: started ? "mcp.server_started" : "mcp.server_stopped",
+                targetType: "mcp_server",
+                targetId: name,
+                metadata: { server: name },
+              },
+              response
+            ))
+          )
+            return;
+        }
         response
           .status(success ? 200 : 400)
           .json({ success, error: error ?? null });
@@ -310,6 +362,20 @@ function apiMCPServerEndpoints(app) {
           toolName,
           enabled
         );
+        if (result.success) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "mcp.tool_toggled",
+                targetType: "mcp_server",
+                targetId: name,
+                metadata: { server: name, tool: toolName, enabled },
+              },
+              response
+            ))
+          )
+            return;
+        }
         response.status(result.success ? 200 : 400).json(result);
       } catch (e) {
         console.error(e.message, e);
@@ -351,6 +417,20 @@ function apiMCPServerEndpoints(app) {
         const { name } = request.params;
         const { success, error } =
           await new MCPCompatibilityLayer().deleteServer(name);
+        if (success) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "mcp.server_removed",
+                targetType: "mcp_server",
+                targetId: name,
+                metadata: { server: name },
+              },
+              response
+            ))
+          )
+            return;
+        }
         response
           .status(success ? 200 : 400)
           .json({ success, error: error ?? null });

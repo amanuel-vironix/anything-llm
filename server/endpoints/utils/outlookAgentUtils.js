@@ -3,6 +3,7 @@ const {
   isSingleUserMode,
 } = require("../../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../../utils/middleware/validatedRequest");
+const { audit } = require("../../utils/audit");
 
 /**
  * Constructs the OAuth redirect URI from the request headers.
@@ -78,6 +79,22 @@ function outlookAgentEndpoints(app) {
             .json({ success: false, error: result.error });
         }
 
+        // The client id and secret are now stored and the sign-in is starting;
+        // the connection itself is recorded by the callback.
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "oauth.connected",
+              reason: "authorization_started",
+              targetType: "oauth",
+              targetId: "outlook",
+              metadata: { provider: "outlook" },
+            },
+            response
+          ))
+        )
+          return;
+
         return response.status(200).json({ success: true, url: result.url });
       } catch (e) {
         console.error("Outlook auth URL error:", e);
@@ -112,6 +129,21 @@ function outlookAgentEndpoints(app) {
 
         const frontendUrl =
           process.env.NODE_ENV === "development" ? "http://localhost:3000" : "";
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "oauth.connected",
+              outcome: result.success ? "success" : "failed",
+              reason: result.success ? undefined : "token_exchange_failed",
+              targetType: "oauth",
+              targetId: "outlook",
+              metadata: { provider: "outlook" },
+            },
+            response
+          ))
+        )
+          return;
 
         if (!result.success) {
           return response.redirect(
@@ -178,6 +210,18 @@ function outlookAgentEndpoints(app) {
         const { SystemSettings } = require("../../models/systemSettings");
         await SystemSettings.delete({ label: "outlook_agent_config" });
         outlookLib.reset();
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "oauth.disconnected",
+              targetType: "oauth",
+              targetId: "outlook",
+              metadata: { provider: "outlook" },
+            },
+            response
+          ))
+        )
+          return;
         return response.status(200).json({ success: true });
       } catch (e) {
         console.error("Outlook revoke error:", e);

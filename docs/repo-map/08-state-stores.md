@@ -104,7 +104,7 @@ schema. Relations without an explicit `onDelete` in the schema got Prisma's defa
 optional relations are `ON DELETE SET NULL`, the one required relation without an action
 (`workspace_documents.workspaceId`) is `ON DELETE RESTRICT`.
 
-### 3.2 Tables (33 models in 32 rows)
+### 3.2 Tables (34 models in 33 rows)
 
 Paths abbreviated: `e/` = `server/endpoints/`, `u/` = `server/utils/`, `j/` = `server/jobs/`,
 `m/` = `server/models/`. "Callers" lists files outside `server/models/` that call the
@@ -129,7 +129,7 @@ wrapping model (reads and writes); the main writers are named in "Writes".
 | 15 | `cache_data` (224) | Generic named cache with `expiresAt` | `name`, `data`, `belongsTo`, `byId`, `expiresAt` | none | `m/cacheData.js` | create `:6`, deleteMany `:32` | **No caller outside the model** | Effectively unused. |
 | 16 | `embed_configs` (235) | Public chat-widget configs | `uuid` unique, `enabled`, `chat_mode`, `allowlist_domains`, override flags, rate limits, `workspace_id`, `createdBy`, `usersId` | `workspaces` CASCADE, `users` SET NULL | `m/embedConfig.js` | create `:28`, update `:101`, delete `:143` | `u/middleware/embedMiddleware.js`, `e/embedManagement.js`, `e/api/embed/index.js` | `EmbedConfig.delete` (`e/embedManagement.js:79`, `e/api/embed/index.js:397`); cascade on workspace delete. |
 | 17 | `embed_chats` (256) | Widget chat history | `session_id`, `prompt`, `response`, `include`, `connection_information` JSON (host, IP, user agent **(unverified fields)**), `embed_id`, `usersId` | `embed_configs` CASCADE, `users` SET NULL | `m/embedChats.js` | create `:24`, updateMany `:94` (`markHistoryInvalid`), deleteMany `:125` | `u/chats/embed.js`, `e/embed/index.js`, `e/embedManagement.js`, `u/helpers/chat/convertTo.js` | Visitor reset hides (`e/embed/index.js:93` **(unverified that it calls markHistoryInvalid)**); admin `EmbedChats.delete` (`e/embedManagement.js:123`); cascade on embed config, so also on workspace delete. |
-| 18 | `event_logs` (270) | Audit log | `event`, `metadata` JSON, `userId` (no FK), `occurredAt` | none | `m/eventLogs.js` | create `:6` (`logEvent`, about 20 caller files), deleteMany `:116` | `e/system.js` (list) | Only full clear by admin: `DELETE /system/event-logs` (`e/system.js:1170-1176`), which immediately logs `event_logs_cleared`. Survives user deletion. |
+| 18 | `event_logs` (270) | Legacy audit log: no new rows (`EventLogs.logEvent` writes `audit_events`); history copied into `audit_events` as `legacy.<event>` by migration `20261111180000_audit_events` | `event`, `metadata` JSON, `userId` (no FK), `occurredAt` | none | `m/eventLogs.js` | deleteMany `:152` (`EventLogs.delete`, legacy rows only) | none (the Event Logs page reads `audit_events`) | Only full clear by admin: `DELETE /system/event-logs` (`e/system.js:1349-1363`), which records `audit.cleared`. Survives user deletion. |
 | 19 | `slash_command_presets` (280) | User `/command` presets | `command`, `prompt`, `uid` (0 = no user), `userId`; unique `(uid, command)` | `users` CASCADE | `m/slashCommandsPresets.js` | create `:54`, update `:93`, delete `:106`, updateMany `:124` (migrate to multi-user) | `e/system.js`, `u/chats/index.js` | `SlashCommandPresets.delete` (`e/system.js:1418`); cascade. |
 | 20 | `document_sync_queues` (294) | Watched-document sync schedule | `workspaceDocId` unique, `staleAfterMs` (default 7 days), `nextSyncAt`, `lastSyncedAt` | `workspace_documents` CASCADE | `m/documentSyncQueue.js` | create `:108` (`watch`), update `:156`, deleteMany `:214` (`unwatch`/`delete`) | `e/experimental/liveSync.js`, `u/files/index.js`, `u/BackgroundWorkers`, `j/sync-watched-documents.js` | `unwatch` (`m/documentSyncQueue.js:130`); cascade when the workspace document is removed. |
 | 21 | `document_sync_executions` (305) | Sync run results | `queueId`, `status`, `result` | `document_sync_queues` CASCADE | `m/documentSyncRun.js` | create `:17`, deleteMany `:79` | `j/sync-watched-documents.js` | Cascade only; `DocumentSyncRun.delete` has no outside caller. |
@@ -148,10 +148,11 @@ wrapping model (reads and writes); the main writers are named in "Writes".
 | 33 | `access_policies` (branch `claude/access-policies-teams-b1be97`, migration `20261111120000_access_policies_teams`) | Per-account model, router, agent and tool rules | `name` unique, `allowed_models` JSON (null = no restriction), `default_provider`/`default_model`, `router_id` (no FK), `allow_agents`, `agent_tools` JSON rule, `max_scheduled_jobs` (default 5), `min_job_interval_minutes` (default 60; both for the later scheduled-jobs change) | none; referenced by `users.policy_id`, `teams.policy_id` (no FK) | `m/accessPolicy.js` | create/update/delete; `u/accessPolicy/toolSharing.js` | `u/accessPolicy/index.js` (`resolvePolicyChain`) on every chat and agent session | `AccessPolicy.delete` (unassigns users and teams in one transaction); `ModelRouter.delete` nulls `router_id` |
 | 34 | `teams` (same migration) | Named groups of users | `name` unique, `policy_id` (no FK), `idp_group` unique (stored, not synced) | parent of `team_members` | `m/team.js` | create/update/delete (`e/teams.js`) | `u/accessPolicy`, `m/workspace.js` | `Team.delete` (transaction: memberships, `workspaces.team_id`, preset and variable `team_id`) |
 | 35 | `team_members` (same migration) | Membership and team role | `team_id`, `user_id` unique (one team per user), `role` (`member`/`lead`), `added_by` | `teams` CASCADE, `users` CASCADE | `m/team.js` | `addMember`, `removeMember`/`setMemberRole` (conditional writes) | `u/middleware/teamProtected.js`, `m/workspace.js`, `m/slashCommandsPresets.js`, `m/systemPromptVariables.js` | team or user delete (cascade), `Team.removeMember` |
+| 36 | `audit_events` (282) | Audit trail: one row per recorded action | `occurred_at`, `action` (catalogue name), `outcome`, `reason`, `actor_type`, `actor_id`, `on_behalf_of`, `team_id`, `workspace_id`, `target_type`, `target_id`, `channel`, `ip`, `user_agent`, `request_id`, `metadata` JSON (allow-listed keys), `prev_hash`, `hash` (hash chain filled from PR B); indexes on `occurred_at`, `action`, actor, `on_behalf_of`, `workspace_id`; no FKs | none | `u/audit/index.js` (`audit.record`) | insert in `record`; `u/audit/outbox.js` flush; `u/audit/backstop.js` (`db.write`) | about 100 call sites across `e/`, `m/`, `j/` (see `u/audit/routes/*.js`) | no delete path in the app; created by migration `20261111180000_audit_events`, which copies old `event_logs` rows as `legacy.<event>` (invite codes not copied). |
 
 **Columns added by the same migration:** `api_keys.user_id` (owner), `workspace_ids` (JSON list), `expiresAt`, `lastUsedAt`; `users.policy_id`; `workspaces.team_id`; `slash_command_presets.team_id` (default 0, unique key now `(uid, team_id, command)`); `system_prompt_variables.team_id`. All are plain integers with no FK, like `workspaces.router_id`.
 
-Count: 33 Prisma models (the last row covers two). `grep -c '^model ' schema.prisma` = 33.
+Count: 34 Prisma models (row 32 covers two). `grep -c '^model ' schema.prisma` = 34.
 
 ### 3.3 Cascade fan-out
 
@@ -194,6 +195,7 @@ central helper. Definitions found:
 | Path (under `server/storage/` unless stated) | Contents | Written by | Deleted by |
 |---|---|---|---|
 | `anythingllm.db` (+ `-journal`) | SQLite database (section 3) | Prisma | never by code |
+| `audit-outbox/<pid>.jsonl` | Audit rows the database refused, one JSON line each, fsynced (`STORAGE_DIR/audit-outbox`, else `server/storage/audit-outbox`) | `server/utils/audit/outbox.js` (`append`) | `flush` at boot and 30 s after a failed insert: renames the file, inserts its rows in one transaction, deletes it (at-least-once) |
 | `documents/<folder>/<name>-<uuid>.json` | Parsed document JSON (text + metadata); `custom-documents/` is the default folder | collector `writeToServerDocuments` (`collector/utils/files/index.js:120-131`), repo/Confluence loaders (`collector/utils/extensions/*/index.js:45-47,88-90`), `moveToDocuments` (`server/models/workspaceParsedFiles.js:128-136`), move between folders (`server/utils/files/index.js:754-795`) | `purgeSourceDocument` (`server/utils/files/index.js:304-316`) via `/system/remove-document(s)` (`server/endpoints/system.js:470-500`); `purgeFolder` `rmSync` (`server/utils/files/purgeDocument.js:81`) except `custom-documents` |
 | `direct-uploads/` | Parsed chat attachments (parse-only flow) | collector (`collector/utils/files/index.js:20-22`) | `moveToDocuments` (moves out); `cleanup-orphan-documents` job every 12 h for files with no `workspace_parsed_files` row (`server/jobs/cleanup-orphan-documents.js:46-80`, `server/utils/BackgroundWorkers/index.js:31-33`) |
 | `vector-cache/<uuidv5>.json` | Chunk text + embeddings per source file | `storeVectorResult` (`server/utils/files/index.js:290-300`) | `purgeVectorCache` (`:321-328`) with document purge; `purgeEntireVectorCache` (`:805-807`) on chunk-size/overlap change and vector reset. **Not** removed when a document is only unembedded from a workspace. |
@@ -218,7 +220,7 @@ central helper. Definitions found:
 | `collector/hotdir/` | Raw uploads waiting for parse | server multer (`server/utils/files/multer.js:16,36`) | collector `trashFile` after each converter (`collector/processSingleFile/index.js:74`, `collector/processSingleFile/convert/*.js`) |
 | `collector/storage/tmp/` | Whisper/ffmpeg intermediates and other temp files | `collector/utils/WhisperProviders/localWhisper.js:69`, `collector/utils/files/index.js:176` | per-converter cleanup **(unverified)** |
 
-Count: 21 directories (19 under `server/storage`, 2 in `collector`), plus 3 files
+Count: 22 directories (20 under `server/storage`, 2 in `collector`), plus 3 files
 (`anythingllm.db`, `plugins/anythingllm_mcp_servers.json`, `server/.env`).
 
 ## 5. Environment catalogue
@@ -433,7 +435,7 @@ Count: 24 fixed localStorage keys, one key family (`anything_llm_menu_*`) and on
 Columns: **DB** = SQLite; **Vec** = vector DB; **Docs** = `storage/documents`; **VCache** =
 `storage/vector-cache`; **DUp** = `storage/direct-uploads`; **Hot** = `collector/hotdir`;
 **Gen** = `generated-files` / `generated-images`; **Mem** = process memory; **Browser** =
-localStorage; **Ext** = external provider (LLM, PostHog, push service); **Log** = `event_logs`.
+localStorage; **Ext** = external provider (LLM, PostHog, push service); **Log** = `event_logs` (legacy) and `audit_events`.
 
 | Data kind | DB | Vec | Docs | VCache | DUp | Hot | Gen | Mem | Browser | Ext | Log | Deletion path per store |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -444,7 +446,8 @@ localStorage; **Ext** = external provider (LLM, PostHog, push service); **Log** 
 | Parsed chat file | X (`workspace_parsed_files`) | | (X if moved to documents) | | X | X (transient) | | | | X (sent to LLM as context) | | DB: `delete-parsed-files` endpoint or cascade (workspace, user, thread). DUp: `cleanup-orphan-documents` within 12 h after the row is gone. |
 | Memory | X (`memories`; `workspace_chats.memory_processed`) | | | | | | | | | X (chats sent to LLM for extraction) | | DB: `DELETE /memory/:id` (`e/memory.js:125-136`), extraction replace, cascade on user or workspace. |
 | Generated file / image | X (referenced in `workspace_chats.response`, `scheduled_job_runs.result`) | | | | | | X | | | | | Gen: cleanup jobs (8 h / 9 h) once no `include=true` chat or run references it and it is over 1 h old, so hiding a chat makes its files eligible. DB refs: as chat message. |
-| Event log | X (`event_logs`) | | | | | | | | | | X | Only `DELETE /system/event-logs` (admin, all rows). Never per user, never by age. |
+| Event log | X (`event_logs`, legacy rows only) | | | | | | | | | | X | `DELETE /system/event-logs` (admin) now deletes legacy `event_logs` rows only. Never per user, never by age. |
+| Audit events | X (`audit_events`, `storage/audit-outbox/`) | | | | | | | | | | X | Written by `audit.record` and the backstop; no delete path in the app; the outbox file is removed after a flush. Never pruned by age. |
 | Embed chat | X (`embed_chats`, incl. `connection_information`) | | | | | | | | **(unverified: embed submodule absent)** | X (sent to LLM) | | DB: admin `EmbedChats.delete` (`e/embedManagement.js:123`), cascade on embed config / workspace delete; visitor reset hides only **(unverified)**. |
 | Telemetry id | X (`system_settings.telemetry_id`) | | | | | | | X (`TelemetryCooldown`) | | X (PostHog) | | DB: **never**. Ext: **never** from AnythingLLM. Opt-out via `DISABLE_TELEMETRY` stops sends only. |
 
@@ -476,7 +479,7 @@ localStorage; **Ext** = external provider (LLM, PostHog, push service); **Log** 
 3. `password_reset_tokens` and expired `temporary_auth_tokens` are never swept by age.
 4. `cache_data` has no callers; `Invite.delete`, `DocumentSyncRun.delete`,
    `ScheduledJobRun.delete` and `WorkspaceAgentInvocation.delete` have no outside callers.
-5. `scheduled_job_runs`, `workspace_agent_invocations`, `invites` and `event_logs` grow without
+5. `scheduled_job_runs`, `workspace_agent_invocations`, `invites` and `audit_events` grow without
    bound (no age-based pruning found).
 6. Exact contents of `embed_chats.connection_information`, `external_communication_connectors.config`
    and the vector payloads per provider were not read.

@@ -9,5 +9,8 @@ const logLevels = ["error", "info", "warn"]; // add "query" to debug query logs
 const prisma = new PrismaClient({
   log: logLevels,
 });
+// Writes to sensitive tables with no audit event get a `db.write` audit row
+// (PLAN-audit-logging-and-compliance.md section 5.2).
+require("../audit/backstop").install(prisma);
 
 module.exports = prisma;

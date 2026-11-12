@@ -2,12 +2,12 @@
 
 Generated from the side-effect ledgers in files 01-08. Do not edit by hand; regenerate after changing a ledger (see README). A row with several classes appears under each.
 
-336 ledger rows.
+371 ledger rows.
 
 | Class | Rows |
 |---|---|
-| [DB](#db) | 128 |
-| [FS](#fs) | 45 |
+| [DB](#db) | 130 |
+| [FS](#fs) | 46 |
 | [VEC](#vec) | 10 |
 | [NET](#net) | 55 |
 | [PROC](#proc) | 15 |
@@ -15,9 +15,9 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [PUSH](#push) | 6 |
 | [ENV](#env) | 14 |
 | [CACHE](#cache) | 29 |
-| [LOG](#log) | 46 |
+| [LOG](#log) | 83 |
 | [TEL](#tel) | 28 |
-| [TIME](#time) | 10 |
+| [TIME](#time) | 11 |
 | [OTHER](#other) | 6 |
 
 ## DB
@@ -43,7 +43,7 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AUTH-39](01-auth-and-users.md) | DB | `password_reset_tokens` create | P-AUTH-21 | `server/models/passwordRecovery.js:81` | expires | no LOG |
 | [SE-AUTH-40](01-auth-and-users.md) | DB | `users.password`, `users.seen_recovery_codes`; delete `password_reset_tokens`, `recovery_codes` | P-AUTH-22 | `server/utils/PasswordRecovery/index.js:87-99` | no |  |
 | [SE-AUTH-41](01-auth-and-users.md) | DB | `api_keys` create/delete | P-AUTH-23/24 | `server/models/apiKeys.js:16,53` |  | plaintext secret |
-| [SE-AUTH-43](01-auth-and-users.md) | DB | `browser_extension_api_keys` create/delete | P-AUTH-26/27 | `server/models/browserExtensionApiKey.js:22,79` |  | no LOG |
+| [SE-AUTH-43](01-auth-and-users.md) | DB | `browser_extension_api_keys` create/delete | P-AUTH-26/27 | `server/models/browserExtensionApiKey.js:22,79` |  | LOG: see SE-AUTH-51 |
 | [SE-AUTH-45](01-auth-and-users.md) | DB | `desktop_mobile_devices` create | P-AUTH-28 | `server/models/mobileDevice.js:125` | delete | no LOG |
 | [SE-AUTH-46](01-auth-and-users.md) | DB | `desktop_mobile_devices.approved` / delete | P-AUTH-29 | `server/models/mobileDevice.js:160,192` |  | no LOG |
 | [SE-AUTH-47](01-auth-and-users.md) | DB | `api_keys.lastUsedAt` (at most once a minute per key) | P-AUTH-31 | `server/utils/middleware/validApiKey.js:156` | overwritten | fire-and-forget |
@@ -76,10 +76,10 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-CHAT-34](02-workspaces-and-chat.md) | DB | `workspace_chats.prompt/response`, or `include=false` tail | P-CHAT-18 | `workspaces.js:529-576`, `workspaceThreads.js:211-262` | no | no edit history |
 | [SE-CHAT-35](02-workspaces-and-chat.md) | DB | `workspace_chats.feedbackScore` | P-CHAT-19 | `workspaceChats.js:271` | yes |  |
 | [SE-CHAT-36](02-workspaces-and-chat.md) | DB | `workspace_chats.include=false` | P-CHAT-20 | `workspaces.js:824` | no |  |
-| [SE-CHAT-37](02-workspaces-and-chat.md) | DB | `workspace_threads`; `workspace_thread_created` | P-CHAT-21 | `workspaceThreads.js:34-57` | yes |  |
+| [SE-CHAT-37](02-workspaces-and-chat.md) | DB | `workspace_threads`; `workspace_thread_created` telemetry; `audit_events: thread.created` | P-CHAT-21 | `server/endpoints/workspaceThreads.js:34-57` (audit at `:53`) | yes |  |
 | [SE-CHAT-38](02-workspaces-and-chat.md) | DB | `workspace_threads.name` | P-CHAT-22 | `workspaceThread.js:68` | yes |  |
 | [SE-CHAT-39](02-workspaces-and-chat.md) | DB | chats hidden; threads + parsed-file rows deleted | P-CHAT-23 | `workspaceThread.js:101-107` | no | parsed-file files on disk untouched (unverified) |
-| [SE-CHAT-40](02-workspaces-and-chat.md) | DB | thread + copied chats; `thread_forked` | P-CHAT-24 | `workspaces.js:766-799` | partly | uses up quota |
+| [SE-CHAT-40](02-workspaces-and-chat.md) | DB | thread + copied chats; `audit_events: thread.forked` | P-CHAT-24 | `server/endpoints/workspaces.js:766-799`; audit at `:929` | partly | uses up quota |
 | [SE-CHAT-41](02-workspaces-and-chat.md) | DB | `workspace_chats` hard delete (one or all) | P-CHAT-26 | `system.js:1224-1226` | no | not gated by `chatHistoryViewable` |
 | [SE-CHAT-45](02-workspaces-and-chat.md) | DB | `model_routers`, `model_router_rules` | P-CHAT-28 | `modelRouter.js:51`, `212`, `236`; `modelRouterRule.js:77`, `194`, `213`, `229` | yes |  |
 | [SE-CHAT-49](02-workspaces-and-chat.md) | DB | `workspaces` create with `team_id`, `team_id` change, lead settings update | P-CHAT-32 | `server/endpoints/teams.js:103,332,363` | yes | LOG `team_workspace_*`, `workspace_team_changed` |
@@ -105,11 +105,11 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AGENT-45](04-agents-tools-and-automation.md) | DB | `users.web_push_subscription_config` or `storage/push-notifications/primary-subscription.json`; `vapid-keys.json` at boot | P-AGENT-33 | `PushNotifications/index.js:146-166,201-222` | overwrite |  |
 | [SE-AGENT-50](04-agents-tools-and-automation.md) | DB | `system_settings.agent_tool_role_policy` upsert | P-AGENT-39 | `server/endpoints/accessPolicies.js:187` | yes | LOG `role_default_updated` |
 | [SE-AGENT-51](04-agents-tools-and-automation.md) | DB | `access_policies.agent_tools` update / policy create, `teams.policy_id` set | P-AGENT-39 | `server/utils/accessPolicy/toolSharing.js:108` | yes | LOG `policy_updated` |
-| [SE-EXT-01](05-external-channels.md) | DB | users (create/update/delete) | P-EXT-03 | `api/admin/index.js:135`, `:207`, `:258` | Delete: no | No LOG on create/update |
+| [SE-EXT-01](05-external-channels.md) | DB | users (create/update/delete) | P-EXT-03 | `api/admin/index.js:135`, `:207`, `:258` | Delete: no | Create not recorded; the route is held for the Google sign-in branch (F-55) |
 | [SE-EXT-03](05-external-channels.md) | DB | invites | P-EXT-04 | `api/admin/index.js:364`, `:424` | Yes (soft) |  |
 | [SE-EXT-04](05-external-channels.md) | DB | workspace_users | P-EXT-05 | `api/admin/index.js:551`, `:648`, `:665` | Yes | No LOG |
 | [SE-EXT-05](05-external-channels.md) | DB | system_settings | P-EXT-06 | `api/admin/index.js:781` | Yes |  |
-| [SE-EXT-10](05-external-channels.md) | DB | documents purge | P-EXT-08 | `api/system/index.js:274` | No | Sequential, partial on error |
+| [SE-EXT-10](05-external-channels.md) | DB | documents purge; `audit_events: document.deleted` at `api/system/index.js:286` | P-EXT-08 | `api/system/index.js:274` | No | Sequential, partial on error |
 | [SE-EXT-11](05-external-channels.md) | DB | temporary auth token | P-EXT-09 | `api/userManagement/index.js:109` | Expires | No LOG |
 | [SE-EXT-12](05-external-channels.md) | DB | workspaces create/update | P-EXT-10 | `api/workspace/index.js:80`, `:345` | Yes |  |
 | [SE-EXT-13](05-external-channels.md) | DB | workspace delete cascade | P-EXT-10 | `api/workspace/index.js:258-267` | No | Not transactional |
@@ -120,19 +120,19 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-EXT-24](05-external-channels.md) | DB | workspace_threads | P-EXT-15 | `api/workspaceThread/index.js:87`, `:184`, `:233` | Delete: no | userId unvalidated |
 | [SE-EXT-25](05-external-channels.md) | DB | thread auto-rename | P-EXT-16/38 | `api/workspaceThread/index.js:458`; `mobile/utils/index.js:192` | Yes |  |
 | [SE-EXT-28](05-external-channels.md) | DB | addToWorkspaces | P-EXT-17/18 | `api/document/index.js:166`, `:481`, `:652` | Yes | Partial success possible |
-| [SE-EXT-32](05-external-channels.md) | DB | embed_configs (+cascade embed_chats) | P-EXT-21 | `api/embed/index.js:275`, `:349`, `:397` | Delete: no | No LOG |
+| [SE-EXT-32](05-external-channels.md) | DB | embed_configs (+cascade embed_chats); `audit_events: embed.created` / `embed.updated` / `embed.deleted` (F-55, dcc0e052) | P-EXT-21 | `api/embed/index.js:275`, `:349`, `:397`; audit at `:309`, `:396`, `:462` | Delete: no |  |
 | [SE-EXT-36](05-external-channels.md) | DB | embed_chats insert (Origin, IP, username) | P-EXT-27 | `embed.js:232-243` | Soft | Only if non-empty |
 | [SE-EXT-38](05-external-channels.md) | DB | embed_chats.include → false | P-EXT-28 | `embedChats.js:94-101` | No |  |
-| [SE-EXT-39](05-external-channels.md) | DB | embed config CRUD + `embed_*` | P-EXT-29 | `embedManagement.js:41-46`, `:63-64`, `:79-84`, `:123` | Delete: no |  |
+| [SE-EXT-39](05-external-channels.md) | DB | embed config CRUD; `audit_events: embed.created` / `embed.updated` / `embed.deleted` | P-EXT-29 | `embedManagement.js:54`, `:85`, `:120` | Delete: no |  |
 | [SE-EXT-40](05-external-channels.md) | DB | connector upsert/delete (encrypted token) | P-EXT-30 | `telegram.js:132-139`, `:168` | Yes |  |
 | [SE-EXT-44](05-external-channels.md) | DB | `approved_users` and per-chat state JSON | P-EXT-31/32/34 | `verification.js:113`, `:159`; `telegramBot/index.js:381` | Yes |  |
 | [SE-EXT-47](05-external-channels.md) | DB | workspace_chats insert (no user) | P-EXT-33 | `telegramBot/chat/stream.js:329-340` | Soft |  |
 | [SE-EXT-49](05-external-channels.md) | DB | Workspace.new / chatModel / thread / reset | P-EXT-34 | `handleWorkspaceCreate.js:13`; `handleModelSelect.js:42`; `handleNewThread.js:17`; `handleReset.js:19` | Yes | Model change is global |
 | [SE-EXT-50](05-external-channels.md) | DB | connector delete in multi-user | P-EXT-35 | `telegramBot/index.js:427` | No |  |
-| [SE-EXT-52](05-external-channels.md) | DB | desktop_mobile_devices create/approve/delete | P-EXT-36/39 | `mobile/index.js:127`, `:46`, `:75`; `mobile/utils/index.js:213` | Yes | No LOG |
+| [SE-EXT-52](05-external-channels.md) | DB | desktop_mobile_devices create/approve/delete | P-EXT-36/39 | `mobile/index.js:127`, `:46`, `:75`; `mobile/utils/index.js:213` | Yes | No LOG (mobile routes pending the access-policy branch) |
 | [SE-EXT-53](05-external-channels.md) | DB | reset-chat / new-thread | P-EXT-37 | `mobile/utils/index.js:129`, `:145` | Soft |  |
-| [SE-EXT-54](05-external-channels.md) | DB | browser_extension_api_keys | P-EXT-40/41 | `browserExtension.js:181`, `:213`, `:51` | Delete: no |  |
-| [SE-EXT-55](05-external-channels.md) | DB | add document to workspace | P-EXT-42 | `browserExtension.js:98-112` | Yes | No LOG |
+| [SE-EXT-54](05-external-channels.md) | DB | browser_extension_api_keys; `audit_events: extension_key.created` / `extension_key.deleted` | P-EXT-40/41 | `browserExtension.js:181`, `:213`, `:51`; audit at `:240`, `:282`, `:57` | Delete: no |  |
+| [SE-EXT-55](05-external-channels.md) | DB | add document to workspace; `audit_events: document.uploaded` / `document.embedded` | P-EXT-42 | `browserExtension.js:98-112`; audit at `:135`, `:149`, `:190` | Yes |  |
 | [SE-EXT-57](05-external-channels.md) | DB | push subscription | P-EXT-43 | `PushNotifications/index.js:148-163` | Overwrite | One per user |
 | [SE-EXT-58](05-external-channels.md) | DB | `workspace_chats` rows now carry the key owner's `user_id` | P-EXT-44/45 | `server/utils/chats/apiChatHandler.js`, `server/utils/chats/openaiCompatible.js` | no |  |
 | [SE-EXT-59](05-external-channels.md) | DB | `workspace_threads.user_id` = key owner on thread create | P-EXT-44 | `server/endpoints/api/workspaceThread/index.js` | yes |  |
@@ -143,15 +143,17 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-ADMIN-08](06-admin-system-and-runtime.md) | DB | `scheduled_job_runs` non-terminal → failed | P-ADMIN-01 | `server/utils/BackgroundWorkers/index.js:115` | no | also on every `bootWorkers()` |
 | [SE-ADMIN-14](06-admin-system-and-runtime.md) | DB | Prisma `migrate deploy` | P-ADMIN-02 | `docker/docker-entrypoint.sh:24` | no |  |
 | [SE-ADMIN-23](06-admin-system-and-runtime.md) | DB | `document_vectors`, `workspace_documents` all rows | P-ADMIN-08, P-ADMIN-09 | `server/utils/vectorStore/resetAllVectorStores.js:21-22` | no | re-embed required |
-| [SE-ADMIN-31](06-admin-system-and-runtime.md) | DB | `system_settings.<label>` upsert | P-ADMIN-14 | `server/models/systemSettings.js:743-757` | yes | no event log |
+| [SE-ADMIN-31](06-admin-system-and-runtime.md) | DB | `system_settings.<label>` upsert | P-ADMIN-14 | `server/models/systemSettings.js:743-757` | yes | `audit_events: settings.changed` per changed label (`server/models/systemSettings.js:794`); free text is named, not stored |
 | [SE-ADMIN-36](06-admin-system-and-runtime.md) | DB | `storage/assets/*`, `logo_filename` | P-ADMIN-16 | `server/endpoints/system.js:989-995,1026-1030` | yes (re-upload) |  |
-| [SE-ADMIN-38](06-admin-system-and-runtime.md) | DB | `experimental_live_file_sync`, `experimental_feature_enabled` | P-ADMIN-19 | `server/endpoints/experimental/liveSync.js:36-45` | yes |  |
+| [SE-ADMIN-38](06-admin-system-and-runtime.md) | DB | `experimental_live_file_sync`, `experimental_feature_enabled`; `audit_events: feature.toggled` | P-ADMIN-19 | `server/endpoints/experimental/liveSync.js:36-45`, audit at `:52` | yes |  |
 | [SE-ADMIN-41](06-admin-system-and-runtime.md) | DB | `outlook_agent_config` create/delete | P-ADMIN-21 | `server/endpoints/utils/outlookAgentUtils.js:21-187` | yes | single-user only |
 | [SE-ADMIN-43](06-admin-system-and-runtime.md) | DB | `users`, `system_settings.multi_user_mode`, ownership columns in 7 tables, whitelist delete | P-ADMIN-24 | `server/endpoints/system.js:679-703` | no | catch deletes all users |
-| [SE-ADMIN-46](06-admin-system-and-runtime.md) | DB | `event_logs` deleteMany + `event_logs_cleared` | P-ADMIN-25 | `server/endpoints/system.js:1175-1180` | no | audit trail lost |
-| [SE-ADMIN-47](06-admin-system-and-runtime.md) | DB | `workspace_chats` deleteMany (one or all) | P-ADMIN-26 | `server/endpoints/system.js:1224-1226` | no | not logged |
+| [SE-ADMIN-46](06-admin-system-and-runtime.md) | DB | legacy `event_logs` deleteMany + `audit_events: audit.cleared` (legacy `event_logs_cleared`) | P-ADMIN-25 | `server/endpoints/system.js:1351-1358`; `server/models/eventLogs.js:152-163` | no | `audit_events` rows survive; route removal planned for PR B (F-54) |
+| [SE-ADMIN-47](06-admin-system-and-runtime.md) | DB | `workspace_chats` deleteMany (one or all); `audit_events: chat.deleted` / `chat.bulk_deleted` | P-ADMIN-26 | `server/endpoints/system.js:1425,1431` | no |  |
 | [SE-ADMIN-49](06-admin-system-and-runtime.md) | DB | system prompt variables | P-ADMIN-27 | `server/endpoints/system.js:1460,1496,1529` | yes |  |
 | [SE-ADMIN-51](06-admin-system-and-runtime.md) | DB | scheduled job / embedding / telegram workers | P-ADMIN-31 | `server/utils/BackgroundWorkers/index.js:219-236,439-475` | n/a |  |
+| [SE-ADMIN-55](06-admin-system-and-runtime.md) | DB | `audit_events` row per `audit.record` | P-ADMIN-35 | `server/utils/audit/index.js` | no (no delete path in the app) |  |
+| [SE-ADMIN-57](06-admin-system-and-runtime.md) | DB | `audit_events: db.write` backstop row for a sensitive-table write with no covering action | P-ADMIN-35 | `server/utils/audit/backstop.js`; `server/utils/prisma/index.js:14` | no | a row here means a missing catalogue event |
 
 ## FS
 
@@ -179,13 +181,13 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AGENT-32](04-agents-tools-and-automation.md) | FS | `storage/plugins/agent-flows/<uuid>.json` write/delete | P-AGENT-25 | `agentFlows/index.js:101-170` | delete: no |  |
 | [SE-AGENT-34](04-agents-tools-and-automation.md) | FS | hub API (`hub.external.anythingllm.com`), zip download, extract to `storage/plugins/agent-skills/<hubId>` | P-AGENT-26/27 | `models/communityHub.js:8-12,38-210`; `agents/imported.js:254-363` | delete endpoint |  |
 | [SE-AGENT-46](04-agents-tools-and-automation.md) | FS | delete unreferenced files > 1 h in `storage/generated-files`, `storage/generated-images` | P-AGENT-34 | `jobs/cleanup-generated-files.js:22-51`; `jobs/cleanup-generated-images.js:18-45` | no | partial scan error → over-deletion |
-| [SE-EXT-10](05-external-channels.md) | FS | documents purge | P-EXT-08 | `api/system/index.js:274` | No | Sequential, partial on error |
+| [SE-EXT-10](05-external-channels.md) | FS | documents purge; `audit_events: document.deleted` at `api/system/index.js:286` | P-EXT-08 | `api/system/index.js:274` | No | Sequential, partial on error |
 | [SE-EXT-19](05-external-channels.md) | FS | collector hotdir attachment | P-EXT-12/13 | `apiChatHandler.js:89` | Collector consumes |  |
 | [SE-EXT-26](05-external-channels.md) | FS | hotdir upload, storage/documents | P-EXT-17/18 | `multer.js:31-37`; `api/document/index.js:144`, `:308` | Yes (delete doc) |  |
 | [SE-EXT-31](05-external-channels.md) | FS | folder mkdir / purge / rename | P-EXT-20 | `api/document/index.js:1036`, `:1093`, `:1179` | Partly | Batch move not atomic |
 | [SE-EXT-33](05-external-channels.md) | FS | MCP config file, spawn server | P-EXT-22 | `server/utils/MCP/index.js:320-348`; `hypervisor/index.js:528` | Yes | Arbitrary command |
 | [SE-EXT-35](05-external-channels.md) | FS | generate/edit image, save | P-EXT-26 | `ImageGenerators/index.js:14-16` | Yes |  |
-| [SE-EXT-55](05-external-channels.md) | FS | add document to workspace | P-EXT-42 | `browserExtension.js:98-112` | Yes | No LOG |
+| [SE-EXT-55](05-external-channels.md) | FS | add document to workspace; `audit_events: document.uploaded` / `document.embedded` | P-EXT-42 | `browserExtension.js:98-112`; audit at `:135`, `:149`, `:190` | Yes |  |
 | [SE-EXT-57](05-external-channels.md) | FS | push subscription | P-EXT-43 | `PushNotifications/index.js:148-163` | Overwrite | One per user |
 | [SE-ADMIN-01](06-admin-system-and-runtime.md) | FS | `storage/comkey/ipc-{priv,pub}.pem` | P-ADMIN-01 | `server/utils/comKey/index.js:53-62` | n/a (rolled each boot) | collector trusts new key |
 | [SE-ADMIN-02](06-admin-system-and-runtime.md) | FS | `SIG_KEY`, `SIG_SALT`, `server/.env` | P-ADMIN-01 | `server/utils/EncryptionManager/index.js:38-42` | no (losing them breaks decryption of stored secrets) | runs at require time and in any `NODE_ENV` |
@@ -201,6 +203,7 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-ADMIN-44](06-admin-system-and-runtime.md) | FS | `JWT_SECRET` ensured | P-ADMIN-24 | `server/endpoints/system.js:704-709` | n/a |  |
 | [SE-ADMIN-50](06-admin-system-and-runtime.md) | FS | direct uploads, generated files, generated images deleted | P-ADMIN-29 | `server/jobs/cleanup-orphan-documents.js:82`, `server/jobs/cleanup-generated-files.js:45-54`, `server/jobs/cleanup-generated-images.js:37-44` | no |  |
 | [SE-ADMIN-54](06-admin-system-and-runtime.md) | FS | `storage/plugins/anythingllm_mcp_servers.json` created on first MCP use | P-ADMIN-01 | `server/utils/MCP/hypervisor/index.js:87-95` | yes | lazy, not at boot |
+| [SE-ADMIN-56](06-admin-system-and-runtime.md) | FS | `storage/audit-outbox/<pid>.jsonl` append + fsync on a failed insert; flushed after 30 s and at boot | P-ADMIN-35 | `server/utils/audit/outbox.js`; `server/utils/audit/index.js:155-165` | yes | at-least-once |
 | [SE-UI-06](07-frontend-routes-and-flows.md) | FS | `saveAs`: `recovery_codes.txt`, chat export, chart JPEG, generated files/images, chat log export, embed chat export | P-UI-04, P-UI-13, P-UI-27, P-UI-28, P-UI-34 | `DisplayRecoveryCodeModal/index.jsx:21`; `ChatSettingsMenu/Export/index.jsx:37`; `Chartable/index.jsx:55`; `FileDownloadCard/index.jsx:23`; `ImageGenerationCard/index.jsx:65`; `GeneralSettings/Chats/index.jsx:68`; `EmbedChats/index.jsx:65`; `ScheduledJobs/components/GeneratedFileCard.jsx:91` | no |  |
 
 ## VEC
@@ -210,11 +213,11 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-CHAT-09](02-workspaces-and-chat.md) | VEC | namespace `slug` dropped | P-CHAT-04 | `workspaces.js:334` | no | errors swallowed |
 | [SE-DOC-14](03-documents-and-ingestion.md) | VEC | namespace `<slug>` | P-DOC-09, -10, -12, -13, -15, -19 | `lance/index.js:255-270`, `:319`, `:297-300` | Re-embed |  |
 | [SE-AGENT-15](04-agents-tools-and-automation.md) | VEC | `addDocumentToNamespace(workspace.slug)` | P-AGENT-10 | `plugins/memory.js:130-147` | no UI path found | ungated |
-| [SE-EXT-10](05-external-channels.md) | VEC | documents purge | P-EXT-08 | `api/system/index.js:274` | No | Sequential, partial on error |
+| [SE-EXT-10](05-external-channels.md) | VEC | documents purge; `audit_events: document.deleted` at `api/system/index.js:286` | P-EXT-08 | `api/system/index.js:274` | No | Sequential, partial on error |
 | [SE-EXT-13](05-external-channels.md) | VEC | workspace delete cascade | P-EXT-10 | `api/workspace/index.js:258-267` | No | Not transactional |
 | [SE-EXT-15](05-external-channels.md) | VEC | workspace_documents | P-EXT-11 | `api/workspace/index.js:521-522` | Yes | Errors not surfaced |
 | [SE-EXT-28](05-external-channels.md) | VEC | addToWorkspaces | P-EXT-17/18 | `api/document/index.js:166`, `:481`, `:652` | Yes | Partial success possible |
-| [SE-EXT-55](05-external-channels.md) | VEC | add document to workspace | P-EXT-42 | `browserExtension.js:98-112` | Yes | No LOG |
+| [SE-EXT-55](05-external-channels.md) | VEC | add document to workspace; `audit_events: document.uploaded` / `document.embedded` | P-EXT-42 | `browserExtension.js:98-112`; audit at `:135`, `:149`, `:190` | Yes |  |
 | [SE-ADMIN-24](06-admin-system-and-runtime.md) | VEC | every workspace namespace / pgvector table | P-ADMIN-08, P-ADMIN-09 | `server/utils/vectorStore/resetAllVectorStores.js:33-49` | no | previous DB for VectorDB change |
 | [SE-ADMIN-53](06-admin-system-and-runtime.md) | VEC | arbitrary vector DB command | P-ADMIN-34 | `server/index.js:163-178` | no | development only |
 
@@ -382,52 +385,89 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 
 | ID | Class | Target | Trigger | Where | Reversible? | Notes |
 |---|---|---|---|---|---|---|
-| [SE-AUTH-05](01-auth-and-users.md) | LOG | `failed_login_invalid_password` | P-AUTH-04 | `server/endpoints/system.js:328` | admin can clear logs |  |
-| [SE-AUTH-07](01-auth-and-users.md) | LOG | `login_event` | P-AUTH-04 | `server/endpoints/system.js:341` |  |  |
-| [SE-AUTH-12](01-auth-and-users.md) | LOG | `enabled_multi_user_mode`, `multi_user_mode_enabled` | P-AUTH-05 | `server/endpoints/system.js:710-713` |  |  |
-| [SE-AUTH-13](01-auth-and-users.md) | LOG | `failed_login_invalid_username` / `_invalid_password` / `_account_suspended` | P-AUTH-06 | `server/endpoints/system.js:227,245,263` |  | stores the attempted username and IP |
-| [SE-AUTH-15](01-auth-and-users.md) | LOG | `login_event` | P-AUTH-06 | `server/endpoints/system.js:286` |  |  |
-| [SE-AUTH-20](01-auth-and-users.md) | LOG | `failed_login_invalid_temporary_auth_token` / `login_event` | P-AUTH-11 | `server/endpoints/system.js:369,385` |  |  |
-| [SE-AUTH-23](01-auth-and-users.md) | LOG | `invite_created` with the plaintext code | P-AUTH-12 | `server/endpoints/admin.js:192` |  | code exposed to log readers |
-| [SE-AUTH-25](01-auth-and-users.md) | LOG | `invite_accepted` | P-AUTH-13 | `server/endpoints/invite.js:77` |  |  |
-| [SE-AUTH-27](01-auth-and-users.md) | LOG | `invite_deleted` | P-AUTH-14 | `server/endpoints/admin.js:215` |  | logged even if not found |
-| [SE-AUTH-29](01-auth-and-users.md) | LOG | `user_created` | P-AUTH-15 | `server/endpoints/admin.js:70` |  |  |
-| [SE-AUTH-31](01-auth-and-users.md) | LOG | `user_updated` (userId = target, not actor) | P-AUTH-16/19/20 | `server/models/user.js:206` |  |  |
-| [SE-AUTH-33](01-auth-and-users.md) | LOG | `user_deleted` | P-AUTH-17 | `server/endpoints/admin.js:146` |  |  |
-| [SE-AUTH-35](01-auth-and-users.md) | LOG | `api_user_deleted` (no actor) | P-AUTH-18 | `server/endpoints/api/admin/index.js:259` |  | create/update not logged |
-| [SE-AUTH-42](01-auth-and-users.md) | LOG | `api_key_created` / `api_key_deleted` | P-AUTH-23/24 | `server/endpoints/system.js:1075,1107`; `server/endpoints/admin.js:531,556` |  |  |
+| [SE-AUTH-05](01-auth-and-users.md) | LOG | `audit_events: auth.login_failed` (still called as legacy `failed_login_invalid_password`, mapped by `server/utils/audit/legacy.js`) | P-AUTH-04 | `server/endpoints/system.js:331` | rows are append-only; `DELETE /system/event-logs` records `audit.cleared` |  |
+| [SE-AUTH-07](01-auth-and-users.md) | LOG | `audit_events: auth.login_succeeded` (legacy `login_event`) | P-AUTH-04 | `server/endpoints/system.js:344` |  |  |
+| [SE-AUTH-12](01-auth-and-users.md) | LOG | `enabled_multi_user_mode`; `audit_events: multi_user.enabled` (legacy `multi_user_mode_enabled`) | P-AUTH-05 | `server/endpoints/system.js:850-854` |  |  |
+| [SE-AUTH-13](01-auth-and-users.md) | LOG | `audit_events: auth.login_failed` (legacy `failed_login_invalid_username` / `_invalid_password` / `_account_suspended`) | P-AUTH-06 | `server/endpoints/system.js:230,248,266` |  | the attempted username and IP are still recorded (see `legacy.js` for the stored fields) |
+| [SE-AUTH-15](01-auth-and-users.md) | LOG | `audit_events: auth.login_succeeded` (legacy `login_event`) | P-AUTH-06 | `server/endpoints/system.js:289` |  |  |
+| [SE-AUTH-20](01-auth-and-users.md) | LOG | `audit_events: auth.login_failed` / `auth.login_succeeded` (legacy `failed_login_invalid_temporary_auth_token` / `login_event`) | P-AUTH-11 | `server/endpoints/system.js:372,388` |  |  |
+| [SE-AUTH-23](01-auth-and-users.md) | LOG | `audit_events: invite.created` (legacy `invite_created`); metadata holds `codeHash` (sha256 of the code), not the code (F-55, a860f55a) | P-AUTH-12 | `server/endpoints/admin.js:192` |  |  |
+| [SE-AUTH-25](01-auth-and-users.md) | LOG | `audit_events: invite.claimed` (legacy `invite_accepted`) | P-AUTH-13 | `server/endpoints/invite.js:77` |  |  |
+| [SE-AUTH-27](01-auth-and-users.md) | LOG | `audit_events: invite.disabled` (legacy `invite_deleted`) | P-AUTH-14 | `server/endpoints/admin.js:215` |  | logged even if not found |
+| [SE-AUTH-29](01-auth-and-users.md) | LOG | `audit_events: user.created` (legacy `user_created`) | P-AUTH-15 | `server/endpoints/admin.js:70` |  |  |
+| [SE-AUTH-31](01-auth-and-users.md) | LOG | `audit_events: user.updated` (+ `user.role_changed`, `user.suspended` / `user.unsuspended` when those fields change); legacy `user_updated`. The actor is the acting admin from the request context; the updated user is the target (F-55, a860f55a). Free-text fields are named, not stored | P-AUTH-16/19/20/22 | `server/models/user.js:206`; mapping `server/utils/audit/legacy.js` |  |  |
+| [SE-AUTH-33](01-auth-and-users.md) | LOG | `audit_events: user.deleted` (legacy `user_deleted`) | P-AUTH-17 | `server/endpoints/admin.js:146` |  |  |
+| [SE-AUTH-35](01-auth-and-users.md) | LOG | `audit_events: user.deleted` (legacy `api_user_deleted`); the actor is the API key from the request context | P-AUTH-18 | `server/endpoints/api/admin/index.js:259` |  | API create/update still not logged except through `User.update` (`user_updated`); the file belongs to the Google sign-in branch (F-55) |
+| [SE-AUTH-42](01-auth-and-users.md) | LOG | `audit_events: api_key.created` / `api_key.deleted` (legacy `api_key_created` / `api_key_deleted`) | P-AUTH-23/24 | `server/endpoints/admin.js:531,556`; the `/system/generate-api-key` and `/system/api-key/:id` routes are held for the access-policy branch (`server/utils/audit/routes/held.js`) |  |  |
 | [SE-AUTH-48](01-auth-and-users.md) | LOG | `legacy_api_key_refused`, `api_key_expired_refused` | P-AUTH-31 | `server/utils/middleware/validApiKey.js:107,139` | no |  |
 | [SE-AUTH-58](01-auth-and-users.md) | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | P-AUTH-37 | `server/endpoints/auth/oidc.js:87,112-122,131` |  | email stored in `event_logs` |
 | [SE-AUTH-61](01-auth-and-users.md) | LOG | `oidc_settings_updated` | P-AUTH-38 | `server/endpoints/auth/oidc.js:166` |  |  |
 | [SE-AUTH-62](01-auth-and-users.md) | LOG | `failed_login_password_disabled` | P-AUTH-06 | `server/endpoints/system.js:292` |  |  |
-| [SE-AUTH-63](01-auth-and-users.md) | LOG | `password_reset` (username only) | P-AUTH-22 | `server/utils/PasswordRecovery/index.js:122` |  | was `user_updated` before this branch |
-| [SE-CHAT-03](02-workspaces-and-chat.md) | LOG | `event_logs` `workspace_created` | P-CHAT-02 | `workspaces.js:75` | no |  |
-| [SE-CHAT-06](02-workspaces-and-chat.md) | LOG | `workspace_prompt_changed` (log includes full prompts) | P-CHAT-03 | `workspace.js:547-555` | no |  |
-| [SE-CHAT-10](02-workspaces-and-chat.md) | LOG | `workspace_deleted` | P-CHAT-04 | `workspaces.js:325` | no |  |
-| [SE-CHAT-24](02-workspaces-and-chat.md) | LOG | `sent_chat` | P-CHAT-10 S12 | `chat.js:76-93`, `186-204` | no | log includes workspace and thread names |
-| [SE-CHAT-37](02-workspaces-and-chat.md) | LOG | `workspace_threads`; `workspace_thread_created` | P-CHAT-21 | `workspaceThreads.js:34-57` | yes |  |
-| [SE-CHAT-40](02-workspaces-and-chat.md) | LOG | thread + copied chats; `thread_forked` | P-CHAT-24 | `workspaces.js:766-799` | partly | uses up quota |
-| [SE-CHAT-42](02-workspaces-and-chat.md) | LOG | `exported_chats` | P-CHAT-26 | `system.js:1246` | no |  |
+| [SE-AUTH-63](01-auth-and-users.md) | LOG | none from the helper: `resetPassword` no longer logs; the route records SE-AUTH-66 | P-AUTH-22 | `server/utils/PasswordRecovery/index.js` |  | removed at the audit merge, where it wrote a second `auth.password_reset` row |
+| [SE-AUTH-64](01-auth-and-users.md) | LOG | `audit_events: auth.password_changed` (outcome `success` / `failed` / `denied`; denied in multi-user mode; `password_disabled` noted in `reason`) | P-AUTH-02/03 | `server/endpoints/system.js:732,759,785` |  | recorded with `recordOrFail`: the request ends 500 if the row can't be stored or queued |
+| [SE-AUTH-65](01-auth-and-users.md) | LOG | `audit_events: auth.recovery_used` (no username or codes stored) | P-AUTH-21 | `server/endpoints/system.js:425` |  |  |
+| [SE-AUTH-66](01-auth-and-users.md) | LOG | `audit_events: auth.password_reset` (success, failed) | P-AUTH-22 | `server/endpoints/system.js:483,498` |  |  |
+| [SE-AUTH-67](01-auth-and-users.md) | LOG | `audit_events: user.updated` (field names only) + `auth.password_changed` on `POST /system/user` | P-AUTH-19 | `server/endpoints/system.js:1516,1531` |  |  |
+| [SE-AUTH-68](01-auth-and-users.md) | LOG | `audit_events: user.updated` (`changedFields: ["pfpFilename"]`) for upload and remove of the profile picture; `extension_key.created` / `extension_key.deleted` for browser extension keys | P-AUTH-20, P-AUTH-26/27 | `server/endpoints/system.js:1015,1118`; `server/endpoints/browserExtension.js:240,282` |  |  |
+| [SE-CHAT-03](02-workspaces-and-chat.md) | LOG | `audit_events: workspace.created` | P-CHAT-02 | `server/endpoints/workspaces.js:77` | no |  |
+| [SE-CHAT-06](02-workspaces-and-chat.md) | LOG | `workspace_prompt_changed` telemetry; `audit_events: workspace.updated` (legacy `workspace_prompt_changed`, metadata `changedFields: ["openAiPrompt"]`; the prompt text is no longer stored) | P-CHAT-03 | `server/models/workspace.js:548-555`; `server/utils/audit/legacy.js` | no | the route also records `workspace.updated` at `server/endpoints/workspaces.js:123` (field names only) |
+| [SE-CHAT-10](02-workspaces-and-chat.md) | LOG | `audit_events: workspace.deleted` | P-CHAT-04 | `server/endpoints/workspaces.js:370` | no |  |
+| [SE-CHAT-24](02-workspaces-and-chat.md) | LOG | `sent_chat` telemetry; `audit_events: chat.sent` (`recordChatSent`: workspace slug, thread id, provider, model, message length, attachment count, mode; never the message or answer) | P-CHAT-10 S12 | `server/endpoints/chat.js:33,117,220` | no | replaces the log row that held workspace and thread names |
+| [SE-CHAT-37](02-workspaces-and-chat.md) | LOG | `workspace_threads`; `workspace_thread_created` telemetry; `audit_events: thread.created` | P-CHAT-21 | `server/endpoints/workspaceThreads.js:34-57` (audit at `:53`) | yes |  |
+| [SE-CHAT-40](02-workspaces-and-chat.md) | LOG | thread + copied chats; `audit_events: thread.forked` | P-CHAT-24 | `server/endpoints/workspaces.js:766-799`; audit at `:929` | partly | uses up quota |
+| [SE-CHAT-42](02-workspaces-and-chat.md) | LOG | `audit_events: chat.exported` (legacy `exported_chats` is no longer called here) | P-CHAT-26 | `server/endpoints/system.js:1465` | no |  |
 | [SE-CHAT-48](02-workspaces-and-chat.md) | LOG | `model_refused_by_policy` | P-CHAT-31 | `server/utils/accessPolicy/index.js:110,133` | no | fire-and-forget |
-| [SE-DOC-07](03-documents-and-ingestion.md) | LOG | `event_logs` | uploads, embeds, removals, resets | `server/endpoints/workspaces.js:174-180`, `:220-224`, `:366-372`; `server/models/documents.js:240-247`, `:277-284`; `resetAllVectorStores.js:23-25` | No | Purge logs once per workspace |
-| [SE-AGENT-44](04-agents-tools-and-automation.md) | LOG | memory candidate and final content in worker log | P-AGENT-31 | `jobs/extract-memories.js:135-137,163-167` | no | personal data in logs |
+| [SE-CHAT-52](02-workspaces-and-chat.md) | LOG | `audit_events: workspace.updated` (field names only) for update, suggested messages, prompt-history clear and delete | P-CHAT-03/06/07 | `server/endpoints/workspaces.js:123,756,1155,1192` | no | no row before |
+| [SE-CHAT-53](02-workspaces-and-chat.md) | LOG | `audit_events: chat.hidden` (delete-chats, delete-edited-chats, hide one chat, fork cleanup), `chat.edited`, `chat.feedback`; thread routes record the same at `workspaceThreads.js:134,189,307` (`chat.hidden`) and `:355` (`chat.edited`) | P-CHAT-17/18/19/20 | `server/endpoints/workspaces.js:563,609,649,704,969` | no | no row before |
+| [SE-CHAT-54](02-workspaces-and-chat.md) | LOG | `audit_events: thread.renamed`, `thread.deleted` (single and bulk) | P-CHAT-22/23 | `server/endpoints/workspaceThreads.js:256,116,174` | no | no row before |
+| [SE-CHAT-55](02-workspaces-and-chat.md) | LOG | `audit_events: chat.viewed_other_user` (admin chat list), `chat.deleted` / `chat.bulk_deleted` | P-CHAT-26 | `server/endpoints/system.js:1395,1425,1431` | no | no row before |
+| [SE-CHAT-56](02-workspaces-and-chat.md) | LOG | `audit_events: document.pinned` | `POST /workspace/:slug/update-pin` (path ID not checked) | `server/endpoints/workspaces.js:799` | no | no row before |
+| [SE-CHAT-57](02-workspaces-and-chat.md) | LOG | model router CRUD: no row yet; `router.*` actions are declared as pending for the access-policy branch (`server/utils/audit/routes/held.js`) | P-CHAT-28 | `server/endpoints/modelRouter.js` | n/a | not recorded in this PR |
+| [SE-DOC-07](03-documents-and-ingestion.md) | LOG | `audit_events`: `document.uploaded`, `document.embedded`, `document.removed`, `workspace.vectors_reset` | uploads, embeds, removals, resets | `server/endpoints/workspaces.js:200`, `:255`, `:420`, `:1039`; `server/models/documents.js:241`, `:290`; `server/utils/EmbeddingWorkerManager.js:45`; `server/utils/vectorStore/resetAllVectorStores.js:24` | No | Purge logs once per workspace; the old `event_logs` rows (`document_uploaded`, `link_uploaded`, `workspace_documents_added` ...) are mapped by `legacy.js` |
+| [SE-DOC-35](03-documents-and-ingestion.md) | LOG | `audit_events: document.deleted` | P-DOC-01/02 (UI upload-and-embed, remove-and-unembed) and `system.js` removals | `server/endpoints/workspaces.js:1099`; `server/endpoints/system.js:548,575,601` | No | no row before |
+| [SE-DOC-36](03-documents-and-ingestion.md) | LOG | `audit_events: parsed_file.created` / `parsed_file.embedded` / `parsed_file.deleted`; `document.uploaded` for move-parsed-files | P-DOC-20 | `server/models/workspaceParsedFiles.js:31`; `server/endpoints/workspacesParsedFiles.js:64,118,166` | No | no row before |
+| [SE-DOC-37](03-documents-and-ingestion.md) | LOG | `audit_events: connector.token_saved` + `document.uploaded` | P-DOC-05, P-DOC-07 (connectors) | `server/endpoints/extensions/index.js:31,41` | No | no row before |
+| [SE-DOC-38](03-documents-and-ingestion.md) | LOG | `audit_events: feature.toggled` (live sync), `document.watched` | P-DOC-17, P-DOC-18 | `server/endpoints/experimental/liveSync.js:52,120` | No |  |
+| [SE-DOC-39](03-documents-and-ingestion.md) | LOG | `audit_events: document.uploaded`, `document.embedded` | P-DOC-22 (browser extension) | `server/endpoints/browserExtension.js:135,149,190` | No | no row before |
+| [SE-AGENT-44](04-agents-tools-and-automation.md) | LOG | worker log now holds counts and ids only (F-41 fixed in 912a0c28); `audit_events: memory.extracted` (created, updated, candidates counts) with a job actor acting on behalf of the user | P-AGENT-31 | `server/jobs/extract-memories.js:135,137,185` | no | no memory text in logs or audit rows |
 | [SE-AGENT-48](04-agents-tools-and-automation.md) | LOG | `wssFailure` + close; `agent_ws_rejected` | P-AGENT-36 | `server/endpoints/agentWebsocket.js:38`, `server/utils/agents/index.js:610` | no |  |
 | [SE-AGENT-49](04-agents-tools-and-automation.md) | LOG | `tool_refused_by_policy`, `model_refused_by_policy` | P-AGENT-37/38 | `server/utils/accessPolicy/index.js:110,133`, `server/utils/agents/index.js:686` | no | fire-and-forget |
-| [SE-EXT-02](05-external-channels.md) | LOG | event_logs `api_user_deleted` | P-EXT-03 | `api/admin/index.js:259` | n/a | userId null |
-| [SE-EXT-08](05-external-channels.md) | LOG | provider change events | P-EXT-07 | `updateENV.js:1585-1596` | n/a | userId null |
-| [SE-EXT-09](05-external-channels.md) | LOG | `exported_chats` | P-EXT-08 | `api/system/index.js:208` | n/a |  |
-| [SE-EXT-14](05-external-channels.md) | LOG | `workspace_created`, `api_workspace_*` | P-EXT-10 | `api/workspace/index.js:91`, `:99`, `:263` | n/a |  |
-| [SE-EXT-23](05-external-channels.md) | LOG | `sent_chat`, `api_sent_chat` | P-EXT-12/13/16/24 | `api/workspace/index.js:711`, `:718`; `api/openai/index.js:147`, `:154` | n/a | Not sent by mobile |
-| [SE-EXT-29](05-external-channels.md) | LOG | `document_uploaded`, `api_*_uploaded` | P-EXT-17/18 | `api/document/index.js:160-163`, `:474-475`, `:648-649` | n/a |  |
-| [SE-EXT-39](05-external-channels.md) | LOG | embed config CRUD + `embed_*` | P-EXT-29 | `embedManagement.js:41-46`, `:63-64`, `:79-84`, `:123` | Delete: no |  |
-| [SE-EXT-42](05-external-channels.md) | LOG | `telegram_bot_connected/disconnected` | P-EXT-30 | `telegram.js:146-149`, `:169` | n/a |  |
-| [SE-EXT-45](05-external-channels.md) | LOG | `telegram_user_approved/denied/revoked` | P-EXT-31/32 | `telegram.js:240`, `:262`, `:284` | n/a |  |
-| [SE-ADMIN-18](06-admin-system-and-runtime.md) | LOG | `update_llm_provider`, `update_embedding_engine`, `update_vector_db` | P-ADMIN-06 | `server/utils/helpers/updateENV.js:1584-1597` | n/a |  |
-| [SE-ADMIN-25](06-admin-system-and-runtime.md) | LOG | `workspace_vectors_reset` | P-ADMIN-08, P-ADMIN-09 | `server/utils/vectorStore/resetAllVectorStores.js:23` | n/a |  |
-| [SE-ADMIN-38](06-admin-system-and-runtime.md) | LOG | `experimental_live_file_sync`, `experimental_feature_enabled` | P-ADMIN-19 | `server/endpoints/experimental/liveSync.js:36-45` | yes |  |
-| [SE-ADMIN-45](06-admin-system-and-runtime.md) | LOG | `enabled_multi_user_mode`, `multi_user_mode_enabled` | P-ADMIN-24 | `server/endpoints/system.js:710-713` | n/a |  |
-| [SE-ADMIN-46](06-admin-system-and-runtime.md) | LOG | `event_logs` deleteMany + `event_logs_cleared` | P-ADMIN-25 | `server/endpoints/system.js:1175-1180` | no | audit trail lost |
-| [SE-ADMIN-48](06-admin-system-and-runtime.md) | LOG | `exported_chats` | P-ADMIN-26 | `server/endpoints/system.js:1246-1253` | n/a |  |
+| [SE-AGENT-52](04-agents-tools-and-automation.md) | LOG | `audit_events: scheduled_job.created` / `updated` / `deleted` / `run` (trigger, approve and reject runs) | P-AGENT-28 | `server/endpoints/scheduledJobs.js:109,201,287,315,364,396` | no | no row before |
+| [SE-AGENT-53](04-agents-tools-and-automation.md) | LOG | `audit_events: memory.created` / `updated` (also promote and demote) / `deleted` | P-AGENT-31/32 | `server/endpoints/memory.js:95,134,164,195,232` | no | no row before |
+| [SE-AGENT-54](04-agents-tools-and-automation.md) | LOG | `audit_events: mcp.server_started` / `mcp.server_stopped` / `mcp.server_removed` / `mcp.tool_toggled` | MCP server toggle, delete, tool toggle (UI) | `server/endpoints/mcpServers.js:71,106,145` | no | the `/v1/mcp-servers` equivalents are in SE-EXT-58 |
+| [SE-AGENT-55](04-agents-tools-and-automation.md) | LOG | `audit_events: flow.created` / `flow.updated` / `flow.deleted` | agent flows | `server/endpoints/agentFlows.js:43,174,225` | no | no row before |
+| [SE-AGENT-56](04-agents-tools-and-automation.md) | LOG | `audit_events: skill.enabled` / `skill.disabled` / `skill.configured` / `skill.removed`; `agent.whitelist_added` | imported agent plugins, skill whitelist | `server/endpoints/experimental/imported-agent-plugins.js:27,59,92`; `server/endpoints/agentSkillWhitelist.js:95` | no | no row before |
+| [SE-AGENT-57](04-agents-tools-and-automation.md) | LOG | not recorded: `agent.session_started` / `agent.session_ended` are declared pending for the access-policy branch (`server/utils/audit/routes/held.js`) | agent websocket session (P-AGENT-14 area) | `server/endpoints/agentWebsocket.js` | n/a |  |
+| [SE-EXT-02](05-external-channels.md) | LOG | `audit_events: user.deleted` (legacy `api_user_deleted`); actor is the API key from the request context | P-EXT-03 | `api/admin/index.js:259` | n/a | `user.updated` via `User.update` is recorded (see SE-AUTH-31) |
+| [SE-EXT-08](05-external-channels.md) | LOG | `audit_events: settings.changed` per changed key (secrets masked) and `vendor.changed` for LLM, embedder, vector DB, TTS/STT and similar settings; a failed key records `settings.changed` with outcome `failed` | P-EXT-07 | `server/utils/helpers/updateENV.js:1628,1641,1654` | n/a | the old `update_llm_provider` / `update_embedding_engine` / `update_vector_db` events are gone; actor is the API key |
+| [SE-EXT-09](05-external-channels.md) | LOG | `audit_events: chat.exported` | P-EXT-08 | `server/endpoints/api/system/index.js:211` | n/a |  |
+| [SE-EXT-14](05-external-channels.md) | LOG | `workspace_created` telemetry; `audit_events: workspace.created` / `workspace.deleted` (legacy `api_workspace_created` / `api_workspace_deleted`) | P-EXT-10 | `api/workspace/index.js:91`, `:99`, `:263` | n/a |  |
+| [SE-EXT-23](05-external-channels.md) | LOG | `sent_chat` telemetry; `audit_events: chat.sent` (legacy `api_sent_chat`) | P-EXT-12/13/16/24 | `api/workspace/index.js:718`, `:879`; `api/workspaceThread/index.js:471`, `:675`; `api/openai/index.js:154`, `:183` | n/a | Not recorded for mobile (route pending the access-policy branch) |
+| [SE-EXT-29](05-external-channels.md) | LOG | telemetry; `audit_events: document.uploaded` and `document.embedded` | P-EXT-17/18 | `api/document/index.js:191`, `:212`, `:360`, `:381`, `:538`, `:559`, `:730`, `:747` | n/a |  |
+| [SE-EXT-32](05-external-channels.md) | LOG | embed_configs (+cascade embed_chats); `audit_events: embed.created` / `embed.updated` / `embed.deleted` (F-55, dcc0e052) | P-EXT-21 | `api/embed/index.js:275`, `:349`, `:397`; audit at `:309`, `:396`, `:462` | Delete: no |  |
+| [SE-EXT-39](05-external-channels.md) | LOG | embed config CRUD; `audit_events: embed.created` / `embed.updated` / `embed.deleted` | P-EXT-29 | `embedManagement.js:54`, `:85`, `:120` | Delete: no |  |
+| [SE-EXT-42](05-external-channels.md) | LOG | `audit_events: telegram.bot_connected` / `telegram.bot_disconnected` (+ `settings.changed` on update-config at `:362`) | P-EXT-30 | `server/endpoints/telegram.js:148`, `:175` | n/a |  |
+| [SE-EXT-45](05-external-channels.md) | LOG | `audit_events: telegram.user_approved` / `telegram.user_denied` / `telegram.user_revoked` | P-EXT-31/32 | `server/endpoints/telegram.js:250`, `:280`, `:310` | n/a |  |
+| [SE-EXT-54](05-external-channels.md) | LOG | browser_extension_api_keys; `audit_events: extension_key.created` / `extension_key.deleted` | P-EXT-40/41 | `browserExtension.js:181`, `:213`, `:51`; audit at `:240`, `:282`, `:57` | Delete: no |  |
+| [SE-EXT-61](05-external-channels.md) | LOG | `audit_events: mcp.server_added` / `mcp.server_updated` / `mcp.server_started` / `mcp.server_stopped` / `mcp.tool_toggled` / `mcp.server_removed` (actor is the API key) | P-EXT-22 | `server/endpoints/api/mcpServers/index.js:106,222,283,369,424` | n/a | no row before |
+| [SE-EXT-62](05-external-channels.md) | LOG | `audit_events: chat.viewed_other_user` for embed chat reads (developer API and admin UI), `embed.chats_deleted` | P-EXT-21, P-EXT-28 | `server/endpoints/api/embed/index.js:136,209`; `server/endpoints/embedManagement.js:159,190` | n/a | no row before |
+| [SE-EXT-63](05-external-channels.md) | LOG | `audit_events: embed.chat` per widget chat; `embed.rejected` when the embed middleware refuses; `embed.chats_deleted` for a session delete | P-EXT-27 | `server/endpoints/embed/index.js:48,125`; `server/utils/middleware/embedMiddleware.js:19` | n/a | no row before |
+| [SE-EXT-64](05-external-channels.md) | LOG | `audit_events: document.viewed`, `document.deleted`, `document.downloaded` | P-EXT-08 (developer API) | `server/endpoints/api/document/index.js:1061,1198,1414,1450` | n/a | no row before |
+| [SE-EXT-65](05-external-channels.md) | LOG | `audit_events: community_hub.connected`, `community_hub.published`, `skill.installed`, `settings.changed` | Community Hub routes | `server/endpoints/communityHub.js:44,50,129,178,237` | n/a | no row before |
+| [SE-EXT-66](05-external-channels.md) | LOG | `audit_events: oauth.connected` / `oauth.disconnected` | Outlook OAuth | `server/endpoints/utils/outlookAgentUtils.js:87,136,216` | n/a | no row before |
+| [SE-EXT-67](05-external-channels.md) | LOG | `audit_events: chat.exported` | `POST /export-chat/:type` | `server/endpoints/utils.js:86` | n/a | no row before |
+| [SE-ADMIN-18](06-admin-system-and-runtime.md) | LOG | `audit_events: settings.changed` per key (secrets masked) and `vendor.changed` for vendor settings; the old `update_*` events are gone | P-ADMIN-06 | `server/utils/helpers/updateENV.js:1628,1641,1654` | n/a | a failed key records `settings.changed` with outcome `failed` |
+| [SE-ADMIN-25](06-admin-system-and-runtime.md) | LOG | `audit_events: workspace.vectors_reset` | P-ADMIN-08, P-ADMIN-09 | `server/utils/vectorStore/resetAllVectorStores.js:24` | n/a |  |
+| [SE-ADMIN-38](06-admin-system-and-runtime.md) | LOG | `experimental_live_file_sync`, `experimental_feature_enabled`; `audit_events: feature.toggled` | P-ADMIN-19 | `server/endpoints/experimental/liveSync.js:36-45`, audit at `:52` | yes |  |
+| [SE-ADMIN-45](06-admin-system-and-runtime.md) | LOG | `enabled_multi_user_mode`; `audit_events: multi_user.enabled` (legacy `multi_user_mode_enabled`) | P-ADMIN-24 | `server/endpoints/system.js:850-854` | n/a |  |
+| [SE-ADMIN-46](06-admin-system-and-runtime.md) | LOG | legacy `event_logs` deleteMany + `audit_events: audit.cleared` (legacy `event_logs_cleared`) | P-ADMIN-25 | `server/endpoints/system.js:1351-1358`; `server/models/eventLogs.js:152-163` | no | `audit_events` rows survive; route removal planned for PR B (F-54) |
+| [SE-ADMIN-47](06-admin-system-and-runtime.md) | LOG | `workspace_chats` deleteMany (one or all); `audit_events: chat.deleted` / `chat.bulk_deleted` | P-ADMIN-26 | `server/endpoints/system.js:1425,1431` | no |  |
+| [SE-ADMIN-48](06-admin-system-and-runtime.md) | LOG | `audit_events: chat.exported` | P-ADMIN-26 | `server/endpoints/system.js:1465` | n/a |  |
+| [SE-ADMIN-55](06-admin-system-and-runtime.md) | LOG | `audit_events` row per `audit.record` | P-ADMIN-35 | `server/utils/audit/index.js` | no (no delete path in the app) |  |
+| [SE-ADMIN-57](06-admin-system-and-runtime.md) | LOG | `audit_events: db.write` backstop row for a sensitive-table write with no covering action | P-ADMIN-35 | `server/utils/audit/backstop.js`; `server/utils/prisma/index.js:14` | no | a row here means a missing catalogue event |
+| [SE-ADMIN-58](06-admin-system-and-runtime.md) | LOG | `audit_events: system.boot`; `system.shutdown` on SIGTERM/SIGINT | P-ADMIN-35, P-ADMIN-01 | `server/utils/audit/boot.js`; `server/utils/boot/index.js:36,71` | no |  |
+| [SE-ADMIN-59](06-admin-system-and-runtime.md) | LOG | `audit_events: vendor.data_sent` hourly counts per vendor, channel and hour (no content); timer flush | P-ADMIN-35 | `server/utils/audit/vendors.js` | no | provider classes wrapped at boot |
+| [SE-ADMIN-60](06-admin-system-and-runtime.md) | LOG | `audit_events: audit.viewed` when the Event Logs page is read | P-ADMIN-35 | `server/endpoints/system.js:1336` | no |  |
 
 ## TEL
 
@@ -435,30 +475,30 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 |---|---|---|---|---|---|---|
 | [SE-AUTH-02](01-auth-and-users.md) | TEL | `onboarding_complete` | P-AUTH-01 | `server/models/systemSettings.js:820` | no |  |
 | [SE-AUTH-06](01-auth-and-users.md) | TEL | `login_event {multiUserMode:false}` | P-AUTH-04 | `server/endpoints/system.js:340` | no |  |
-| [SE-AUTH-12](01-auth-and-users.md) | TEL | `enabled_multi_user_mode`, `multi_user_mode_enabled` | P-AUTH-05 | `server/endpoints/system.js:710-713` |  |  |
+| [SE-AUTH-12](01-auth-and-users.md) | TEL | `enabled_multi_user_mode`; `audit_events: multi_user.enabled` (legacy `multi_user_mode_enabled`) | P-AUTH-05 | `server/endpoints/system.js:850-854` |  |  |
 | [SE-AUTH-14](01-auth-and-users.md) | TEL | `login_event` (wrong `multiUserMode:false`) | P-AUTH-06 | `server/endpoints/system.js:280` |  |  |
 | [SE-AUTH-21](01-auth-and-users.md) | TEL | `login_event {multiUserMode:true}` | P-AUTH-11 | `server/endpoints/system.js:380` |  |  |
 | [SE-CHAT-02](02-workspaces-and-chat.md) | TEL | `workspace_created` | P-CHAT-02 | `workspaces.js:62` | no | fires even on failure |
-| [SE-CHAT-06](02-workspaces-and-chat.md) | TEL | `workspace_prompt_changed` (log includes full prompts) | P-CHAT-03 | `workspace.js:547-555` | no |  |
-| [SE-CHAT-24](02-workspaces-and-chat.md) | TEL | `sent_chat` | P-CHAT-10 S12 | `chat.js:76-93`, `186-204` | no | log includes workspace and thread names |
-| [SE-CHAT-37](02-workspaces-and-chat.md) | TEL | `workspace_threads`; `workspace_thread_created` | P-CHAT-21 | `workspaceThreads.js:34-57` | yes |  |
+| [SE-CHAT-06](02-workspaces-and-chat.md) | TEL | `workspace_prompt_changed` telemetry; `audit_events: workspace.updated` (legacy `workspace_prompt_changed`, metadata `changedFields: ["openAiPrompt"]`; the prompt text is no longer stored) | P-CHAT-03 | `server/models/workspace.js:548-555`; `server/utils/audit/legacy.js` | no | the route also records `workspace.updated` at `server/endpoints/workspaces.js:123` (field names only) |
+| [SE-CHAT-24](02-workspaces-and-chat.md) | TEL | `sent_chat` telemetry; `audit_events: chat.sent` (`recordChatSent`: workspace slug, thread id, provider, model, message length, attachment count, mode; never the message or answer) | P-CHAT-10 S12 | `server/endpoints/chat.js:33,117,220` | no | replaces the log row that held workspace and thread names |
+| [SE-CHAT-37](02-workspaces-and-chat.md) | TEL | `workspace_threads`; `workspace_thread_created` telemetry; `audit_events: thread.created` | P-CHAT-21 | `server/endpoints/workspaceThreads.js:34-57` (audit at `:53`) | yes |  |
 | [SE-CHAT-47](02-workspaces-and-chat.md) | TEL | `model_router_created`, `model_router_rule_created` | P-CHAT-28 | `modelRouter.js:65`, `128` | no |  |
 | [SE-DOC-06](03-documents-and-ingestion.md) | TEL | telemetry | uploads, links, connectors, embeds, watch | `server/endpoints/workspaces.js:173`, `:219`, `:882`; `server/endpoints/extensions/index.js:55` etc.; `server/models/documents.js:233`; `server/models/documentSyncQueue.js:263`, `:268` | No |  |
 | [SE-AGENT-04](04-agents-tools-and-automation.md) | TEL | `agent_chat_started` | P-AGENT-01 | `endpoints/agentWebsocket.js:65`; `apiChatHandler.js:197` | no |  |
 | [SE-AGENT-05](04-agents-tools-and-automation.md) | TEL | `agent_chat_sent`, `agent_tool_call {tool}` | P-AGENT-02 | `websocket.js:486-487`; `aibitat/index.js:1100` | no | tool names only |
 | [SE-AGENT-21](04-agents-tools-and-automation.md) | TEL | `agent_generated_file_downloaded {type}` | P-AGENT-14 | `endpoints/agentFileServer.js:79-81` | no |  |
-| [SE-EXT-14](05-external-channels.md) | TEL | `workspace_created`, `api_workspace_*` | P-EXT-10 | `api/workspace/index.js:91`, `:99`, `:263` | n/a |  |
-| [SE-EXT-23](05-external-channels.md) | TEL | `sent_chat`, `api_sent_chat` | P-EXT-12/13/16/24 | `api/workspace/index.js:711`, `:718`; `api/openai/index.js:147`, `:154` | n/a | Not sent by mobile |
-| [SE-EXT-29](05-external-channels.md) | TEL | `document_uploaded`, `api_*_uploaded` | P-EXT-17/18 | `api/document/index.js:160-163`, `:474-475`, `:648-649` | n/a |  |
+| [SE-EXT-14](05-external-channels.md) | TEL | `workspace_created` telemetry; `audit_events: workspace.created` / `workspace.deleted` (legacy `api_workspace_created` / `api_workspace_deleted`) | P-EXT-10 | `api/workspace/index.js:91`, `:99`, `:263` | n/a |  |
+| [SE-EXT-23](05-external-channels.md) | TEL | `sent_chat` telemetry; `audit_events: chat.sent` (legacy `api_sent_chat`) | P-EXT-12/13/16/24 | `api/workspace/index.js:718`, `:879`; `api/workspaceThread/index.js:471`, `:675`; `api/openai/index.js:154`, `:183` | n/a | Not recorded for mobile (route pending the access-policy branch) |
+| [SE-EXT-29](05-external-channels.md) | TEL | telemetry; `audit_events: document.uploaded` and `document.embedded` | P-EXT-17/18 | `api/document/index.js:191`, `:212`, `:360`, `:381`, `:538`, `:559`, `:730`, `:747` | n/a |  |
 | [SE-EXT-30](05-external-channels.md) | TEL | `agent_generated_file_downloaded` | P-EXT-19 | `api/document/index.js:1300`, `:1328` | n/a |  |
 | [SE-EXT-37](05-external-channels.md) | TEL | `embed_sent_chat` | P-EXT-27 | `embed/index.js:48` | n/a |  |
-| [SE-EXT-42](05-external-channels.md) | TEL | `telegram_bot_connected/disconnected` | P-EXT-30 | `telegram.js:146-149`, `:169` | n/a |  |
+| [SE-EXT-42](05-external-channels.md) | TEL | `audit_events: telegram.bot_connected` / `telegram.bot_disconnected` (+ `settings.changed` on update-config at `:362`) | P-EXT-30 | `server/endpoints/telegram.js:148`, `:175` | n/a |  |
 | [SE-EXT-56](05-external-channels.md) | TEL | `browser_extension_*` | P-EXT-42 | `browserExtension.js:119`, `:145` | n/a |  |
 | [SE-ADMIN-04](06-admin-system-and-runtime.md) | TEL | `system_settings.onboarding_complete` | P-ADMIN-01 | `server/utils/boot/markOnboarded.js:19` | no |  |
 | [SE-ADMIN-06](06-admin-system-and-runtime.md) | TEL | `server_boot` | P-ADMIN-01 | `server/utils/telemetry/index.js:27` | no | skipped if disabled/dev |
 | [SE-ADMIN-37](06-admin-system-and-runtime.md) | TEL | `telemetry_disabled` | P-ADMIN-18 | `server/utils/helpers/updateENV.js:636` | no | last event before opt-out |
-| [SE-ADMIN-38](06-admin-system-and-runtime.md) | TEL | `experimental_live_file_sync`, `experimental_feature_enabled` | P-ADMIN-19 | `server/endpoints/experimental/liveSync.js:36-45` | yes |  |
-| [SE-ADMIN-45](06-admin-system-and-runtime.md) | TEL | `enabled_multi_user_mode`, `multi_user_mode_enabled` | P-ADMIN-24 | `server/endpoints/system.js:710-713` | n/a |  |
+| [SE-ADMIN-38](06-admin-system-and-runtime.md) | TEL | `experimental_live_file_sync`, `experimental_feature_enabled`; `audit_events: feature.toggled` | P-ADMIN-19 | `server/endpoints/experimental/liveSync.js:36-45`, audit at `:52` | yes |  |
+| [SE-ADMIN-45](06-admin-system-and-runtime.md) | TEL | `enabled_multi_user_mode`; `audit_events: multi_user.enabled` (legacy `multi_user_mode_enabled`) | P-ADMIN-24 | `server/endpoints/system.js:850-854` | n/a |  |
 | [SE-ADMIN-52](06-admin-system-and-runtime.md) | TEL | all catalogue events | P-ADMIN-32 | `server/models/telemetry.js:114-118` | no |  |
 | [SE-UI-03](07-frontend-routes-and-flows.md) | TEL | email, use case, comment | P-UI-02 survey | `pages/OnboardingFlow/Steps/Survey/index.jsx:12-43` | no | skipped in dev (`:13-16`); sets `anythingllm_completed_questionnaire` |
 
@@ -476,6 +516,7 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-ADMIN-09](06-admin-system-and-runtime.md) | TIME | Bree cleanup/memory/sync jobs; cron timers | P-ADMIN-01 | `server/utils/BackgroundWorkers/index.js:125-142,301-309` | yes |  |
 | [SE-ADMIN-35](06-admin-system-and-runtime.md) | TIME | add/remove `extract-memories` | P-ADMIN-14, P-ADMIN-22 | `server/utils/BackgroundWorkers/index.js:178-197` | yes | no-op if Bree stopped |
 | [SE-ADMIN-39](06-admin-system-and-runtime.md) | TIME | whole BackgroundService boot (second Bree) or stop (all jobs, timers, `bree=null`) | P-ADMIN-19 | `server/models/documentSyncQueue.js:42-48`, `server/utils/BackgroundWorkers/index.js:106-163` | until restart | breaks embedding/telegram/scheduled jobs when disabled |
+| [SE-ADMIN-59](06-admin-system-and-runtime.md) | TIME | `audit_events: vendor.data_sent` hourly counts per vendor, channel and hour (no content); timer flush | P-ADMIN-35 | `server/utils/audit/vendors.js` | no | provider classes wrapped at boot |
 
 ## OTHER
 

@@ -12,6 +12,7 @@ const {
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
 const { Telemetry } = require("../models/telemetry");
+const { audit } = require("../utils/audit");
 
 function browserExtensionEndpoints(app) {
   if (!app) return;
@@ -50,6 +51,18 @@ function browserExtensionEndpoints(app) {
         const { success, error } =
           await BrowserExtensionApiKey.delete(apiKeyId);
         if (!success) throw new Error(error);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "extension_key.deleted",
+              targetType: "extension_key",
+              targetId: apiKeyId,
+              metadata: { keyId: apiKeyId },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ success: true });
       } catch (error) {
         console.error(error);
@@ -116,6 +129,35 @@ function browserExtensionEndpoints(app) {
           return;
         }
 
+        const docName = documents[0].location;
+        await audit.record(
+          {
+            action: "document.uploaded",
+            targetType: "document",
+            targetId: docName,
+            workspaceId: workspace.id,
+            metadata: {
+              docName,
+              workspaceName: workspace.name,
+              via: "browser_extension",
+            },
+          },
+          { response }
+        );
+        await audit.record(
+          {
+            action: "document.embedded",
+            targetType: "document",
+            targetId: docName,
+            workspaceId: workspace.id,
+            metadata: {
+              docName,
+              workspaceName: workspace.name,
+              docPaths: [docName],
+            },
+          },
+          { response }
+        );
         await Telemetry.sendTelemetry("browser_extension_embed_content");
         response.status(200).json({ success: true });
       } catch (error) {
@@ -132,7 +174,7 @@ function browserExtensionEndpoints(app) {
       try {
         const { textContent, metadata } = reqBody(request);
         const Collector = new CollectorApi();
-        const { success, reason } = await Collector.processRawText(
+        const { success, reason, documents } = await Collector.processRawText(
           textContent,
           metadata
         );
@@ -142,6 +184,16 @@ function browserExtensionEndpoints(app) {
           return;
         }
 
+        const docName = documents?.[0]?.location;
+        await audit.record(
+          {
+            action: "document.uploaded",
+            targetType: "document",
+            targetId: docName,
+            metadata: { docName, via: "browser_extension" },
+          },
+          { response }
+        );
         await Telemetry.sendTelemetry("browser_extension_upload_content");
         response.status(200).json({ success: true });
       } catch (error) {
@@ -182,6 +234,18 @@ function browserExtensionEndpoints(app) {
           user?.id || null
         );
         if (error) throw new Error(error);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "extension_key.created",
+              targetType: "extension_key",
+              targetId: apiKey.id,
+              metadata: { keyId: apiKey.id },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({
           apiKey: apiKey.key,
         });
@@ -212,6 +276,18 @@ function browserExtensionEndpoints(app) {
 
         const { success, error } = await BrowserExtensionApiKey.delete(id);
         if (!success) throw new Error(error);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "extension_key.deleted",
+              targetType: "extension_key",
+              targetId: id,
+              metadata: { keyId: id, count: 1 },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ success: true });
       } catch (error) {
         console.error(error);

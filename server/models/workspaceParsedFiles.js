@@ -1,5 +1,5 @@
 const prisma = require("../utils/prisma");
-const { EventLogs } = require("./eventLogs");
+const { audit } = require("../utils/audit");
 const { Document } = require("./documents");
 const { documentsPath, directUploadsPath } = require("../utils/files");
 const { safeJsonParse } = require("../utils/http");
@@ -27,14 +27,13 @@ const WorkspaceParsedFiles = {
         },
       });
 
-      await EventLogs.logEvent(
-        "workspace_file_uploaded",
-        {
-          filename,
-          workspaceId,
-        },
-        userId
-      );
+      await audit.record({
+        action: "parsed_file.created",
+        targetType: "parsed_file",
+        targetId: file.id,
+        workspaceId: parseInt(workspaceId),
+        metadata: { fileId: file.id, fileName: filename },
+      });
 
       return { file, error: null };
     } catch (error) {

@@ -732,6 +732,10 @@ const SystemSettings = {
   // Only use this method when directly setting a key value
   // that takes no user input for the keys being modified.
   _updateSettings: async function (updates = {}) {
+    const previous = await prisma.system_settings
+      .findMany({ where: { label: { in: Object.keys(updates) } } })
+      .catch(() => []);
+    const written = {};
     try {
       const updatePromises = [];
       for (const key of Object.keys(updates)) {
@@ -745,6 +749,7 @@ const SystemSettings = {
         }
 
         if (validatedValue === undefined) continue;
+        written[key] = validatedValue === null ? null : String(validatedValue);
 
         updatePromises.push(
           prisma.system_settings.upsert({
@@ -761,10 +766,49 @@ const SystemSettings = {
       }
 
       await Promise.all(updatePromises);
+      await this._recordChanges(previous, written);
       return { success: true, error: null };
     } catch (error) {
       console.error("FAILED TO UPDATE SYSTEM SETTINGS", error.message);
+      await this._recordChanges(previous, written, error).catch(() => {});
       return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * One settings.changed row per changed label (plan section 4.6, item 9).
+   * Token-like values (flags, numbers, ids, file names) are kept; secret-named
+   * labels are masked; free text, JSON and connection lists are left out.
+   * @param {{label: string, value: (string|null)}[]} previous
+   * @param {Record<string, (string|null)>} written
+   * @param {Error} [error] - set when the write failed part-way
+   */
+  _recordChanges: async function (previous, written, error = null) {
+    const { audit } = require("../utils/audit");
+    const { isSecretName, maskSecret } = require("../utils/audit/sanitize");
+    const before = Object.fromEntries(previous.map((s) => [s.label, s.value]));
+    const shown = (label, value) => {
+      if (value === null || value === undefined) return null;
+      if (isSecretName(label)) return maskSecret(value);
+      // Flags, numbers, ids and file names only: free text (a system
+      // prompt, footer links, JSON) is named by its label, never stored.
+      return /^[\w.:@/-]{0,64}$/.test(value) ? value : undefined;
+    };
+    for (const [label, value] of Object.entries(written)) {
+      if (!error && (before[label] ?? null) === value) continue;
+      await audit.record({
+        action: "settings.changed",
+        outcome: error ? "failed" : "success",
+        reason: error ? "write_failed" : undefined,
+        targetType: "system_setting",
+        targetId: label,
+        metadata: {
+          key: label,
+          from: shown(label, before[label]),
+          to: shown(label, value),
+          source: "system_settings",
+        },
+      });
     }
   },
 

@@ -26,7 +26,7 @@ const {
   flexUserRoleValid,
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const {
   WorkspaceSuggestedMessages,
 } = require("../models/workspacesSuggestedMessages");
@@ -72,12 +72,20 @@ function workspaceEndpoints(app) {
           user?.id
         );
 
-        await EventLogs.logEvent(
-          "workspace_created",
+        await audit.record(
           {
-            workspaceName: workspace?.name || "Unknown Workspace",
+            action: "workspace.created",
+            outcome: workspace ? "success" : "failed",
+            reason: workspace ? undefined : "create_failed",
+            targetType: "workspace",
+            targetId: workspace?.id,
+            workspaceId: workspace?.id,
+            metadata: {
+              workspaceName: workspace?.name || "Unknown Workspace",
+              slug: workspace?.slug,
+            },
           },
-          user?.id
+          { response }
         );
         response.status(200).json({ workspace, message });
       } catch (e) {
@@ -108,6 +116,22 @@ function workspaceEndpoints(app) {
         const { workspace, message } = await Workspace.update(
           currWorkspace.id,
           data
+        );
+        // Field names only: the prompt and other values never go in the row.
+        await audit.record(
+          {
+            action: "workspace.updated",
+            outcome: workspace?.id && !message ? "success" : "failed",
+            reason: workspace?.id && !message ? undefined : "update_failed",
+            targetType: "workspace",
+            targetId: currWorkspace.id,
+            workspaceId: currWorkspace.id,
+            metadata: {
+              slug: currWorkspace.slug,
+              changedFields: Object.keys(Workspace.validateFields(data)),
+            },
+          },
+          { response }
         );
         response.status(200).json({ workspace, message });
       } catch (e) {
@@ -171,13 +195,17 @@ function workspaceEndpoints(app) {
           `Document ${originalname} uploaded processed and successfully. It is now available in documents.`
         );
         await Telemetry.sendTelemetry("document_uploaded");
-        await EventLogs.logEvent(
-          "document_uploaded",
+        await audit.record(
           {
-            documentName: originalname,
-            ...(folderName ? { folder: folderName } : {}),
+            action: "document.uploaded",
+            targetType: "document",
+            metadata: {
+              docName: originalname,
+              via: "upload",
+              count: documents?.length,
+            },
           },
-          response.locals?.user?.id
+          { response }
         );
         response.status(200).json({ success: true, error: null });
       } catch (e) {
@@ -217,10 +245,18 @@ function workspaceEndpoints(app) {
           `Link ${link} uploaded processed and successfully. It is now available in documents.`
         );
         await Telemetry.sendTelemetry("link_uploaded");
-        await EventLogs.logEvent(
-          "link_uploaded",
-          { link },
-          response.locals?.user?.id
+        // Only the host of the link is recorded, never the full URL.
+        let linkHost = null;
+        try {
+          linkHost = new URL(link).host;
+        } catch {}
+        await audit.record(
+          {
+            action: "document.uploaded",
+            targetType: "document",
+            metadata: { docName: linkHost, via: "link" },
+          },
+          { response }
         );
         response.status(200).json({ success: true, error: null });
       } catch (e) {
@@ -322,19 +358,28 @@ function workspaceEndpoints(app) {
         await Document.delete({ workspaceId: Number(workspace.id) });
         await Workspace.delete({ id: Number(workspace.id) });
 
-        await EventLogs.logEvent(
-          "workspace_deleted",
-          {
-            workspaceName: workspace?.name || "Unknown Workspace",
-          },
-          response.locals?.user?.id
-        );
-
         try {
           await VectorDb["delete-namespace"]({ namespace: slug });
         } catch (e) {
           console.error(e.message);
         }
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "workspace.deleted",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: {
+                workspaceName: workspace?.name || "Unknown Workspace",
+                slug: workspace.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -363,19 +408,28 @@ function workspaceEndpoints(app) {
         await DocumentVectors.deleteForWorkspace(workspace.id);
         await Document.delete({ workspaceId: Number(workspace.id) });
 
-        await EventLogs.logEvent(
-          "workspace_vectors_reset",
-          {
-            workspaceName: workspace?.name || "Unknown Workspace",
-          },
-          response.locals?.user?.id
-        );
-
         try {
           await VectorDb["delete-namespace"]({ namespace: slug });
         } catch (e) {
           console.error(e.message);
         }
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "workspace.vectors_reset",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: {
+                workspaceName: workspace?.name || "Unknown Workspace",
+                slug: workspace.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -503,6 +557,22 @@ function workspaceEndpoints(app) {
           workspaceId: workspace.id,
         });
 
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.hidden",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: {
+                count: chatIds.length,
+                workspaceSlug: workspace.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -533,6 +603,19 @@ function workspaceEndpoints(app) {
           id: { gte: Number(startingId) },
         });
 
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.hidden",
+              targetType: "workspace",
+              targetId: workspace.id,
+              workspaceId: workspace.id,
+              metadata: { workspaceSlug: workspace.slug },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -559,6 +642,23 @@ function workspaceEndpoints(app) {
           id: Number(chatId),
         });
         if (!existingChat) throw new Error("Invalid chat.");
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.edited",
+              targetType: "chat",
+              targetId: existingChat.id,
+              workspaceId: workspace.id,
+              metadata: {
+                role: role === "user" ? "user" : "assistant",
+                workspaceSlug: workspace.slug,
+              },
+            },
+            response
+          ))
+        )
+          return;
 
         if (role === "user") {
           await WorkspaceChats._update(existingChat.id, {
@@ -599,6 +699,16 @@ function workspaceEndpoints(app) {
 
         if (!existingChat) return response.status(404).json({ success: false });
         await WorkspaceChats.updateFeedbackScore(chatId, feedback);
+        await audit.record(
+          {
+            action: "chat.feedback",
+            targetType: "chat",
+            targetId: chatId,
+            workspaceId: response.locals.workspace.id,
+            metadata: { feedback: feedback === null ? null : String(feedback) },
+          },
+          { response }
+        );
         return response.status(200).json({ success: true });
       } catch (error) {
         console.error("Error updating chat feedback:", error);
@@ -640,6 +750,17 @@ function workspaceEndpoints(app) {
         }
 
         await WorkspaceSuggestedMessages.saveAll(messages, slug);
+        const workspace = await Workspace.get({ slug });
+        await audit.record(
+          {
+            action: "workspace.updated",
+            targetType: "workspace",
+            targetId: workspace?.id,
+            workspaceId: workspace?.id,
+            metadata: { slug, changedFields: ["suggestedMessages"] },
+          },
+          { response }
+        );
         return response.status(200).json({
           success: true,
           message: "Suggested messages saved successfully.",
@@ -673,6 +794,20 @@ function workspaceEndpoints(app) {
         if (!document) return response.sendStatus(404).end();
 
         await Document.update(document.id, { pinned: pinStatus });
+        await audit.record(
+          {
+            action: "document.pinned",
+            targetType: "document",
+            targetId: document.id,
+            workspaceId: workspace.id,
+            metadata: {
+              docName: document.filename,
+              workspaceSlug: workspace.slug,
+              pinned: !!pinStatus,
+            },
+          },
+          { response }
+        );
         return response.status(200).end();
       } catch (error) {
         console.error("Error processing the pin status update:", error);
@@ -789,13 +924,19 @@ function workspaceEndpoints(app) {
             : "Forked Thread",
         });
 
-        await EventLogs.logEvent(
-          "thread_forked",
+        await audit.record(
           {
-            workspaceName: workspace?.name || "Unknown Workspace",
-            threadName: newThread.name,
+            action: "thread.forked",
+            targetType: "thread",
+            targetId: newThread.id,
+            workspaceId: workspace.id,
+            metadata: {
+              threadSlug: newThread.slug,
+              workspaceSlug: workspace.slug,
+              fromChatId: Number(chatId),
+            },
           },
-          user?.id
+          { response }
         );
         response.status(200).json({ newThreadSlug: newThread.slug });
       } catch (e) {
@@ -822,6 +963,19 @@ function workspaceEndpoints(app) {
             .json({ success: false, error: "Chat not found." });
 
         await WorkspaceChats._update(validChat.id, { include: false });
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.hidden",
+              targetType: "chat",
+              targetId: validChat.id,
+              workspaceId: validChat.workspaceId,
+              metadata: { count: 1 },
+            },
+            response
+          ))
+        )
+          return;
         response.json({ success: true, error: null });
       } catch (e) {
         console.error(e.message, e);
@@ -880,12 +1034,18 @@ function workspaceEndpoints(app) {
           `Document ${originalname} uploaded processed and successfully. It is now available in documents.`
         );
         await Telemetry.sendTelemetry("document_uploaded");
-        await EventLogs.logEvent(
-          "document_uploaded",
+        await audit.record(
           {
-            documentName: originalname,
+            action: "document.uploaded",
+            targetType: "document",
+            workspaceId: currWorkspace.id,
+            metadata: {
+              docName: originalname,
+              workspaceName: currWorkspace.name,
+              via: "upload_and_embed",
+            },
           },
-          response.locals?.user?.id
+          { response }
         );
 
         const document = documents[0];
@@ -933,6 +1093,22 @@ function workspaceEndpoints(app) {
 
         // Will delete the document from the entire system + wil unembed it.
         await purgeDocument(body.documentLocation);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "document.deleted",
+              targetType: "document",
+              workspaceId: currWorkspace.id,
+              metadata: {
+                workspaceName: currWorkspace.name,
+                docPaths: [String(body.documentLocation)],
+                count: 1,
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -971,11 +1147,25 @@ function workspaceEndpoints(app) {
     ],
     async (_, response) => {
       try {
-        response.status(200).json({
-          success: await Workspace.deleteAllPromptHistory({
-            workspaceId: response.locals.workspace.id,
-          }),
+        const success = await Workspace.deleteAllPromptHistory({
+          workspaceId: response.locals.workspace.id,
         });
+        await audit.record(
+          {
+            action: "workspace.updated",
+            outcome: success ? "success" : "failed",
+            reason: success ? undefined : "prompt_history_clear_failed",
+            targetType: "workspace",
+            targetId: response.locals.workspace.id,
+            workspaceId: response.locals.workspace.id,
+            metadata: {
+              slug: response.locals.workspace.slug,
+              changedFields: ["promptHistory"],
+            },
+          },
+          { response }
+        );
+        response.status(200).json({ success });
       } catch (error) {
         console.error("Error clearing prompt history:", error);
         response.sendStatus(500).end();
@@ -993,12 +1183,26 @@ function workspaceEndpoints(app) {
     async (request, response) => {
       try {
         const { id } = request.params;
-        response.status(200).json({
-          success: await Workspace.deletePromptHistory({
-            workspaceId: response.locals.workspace.id,
-            id: Number(id),
-          }),
+        const success = await Workspace.deletePromptHistory({
+          workspaceId: response.locals.workspace.id,
+          id: Number(id),
         });
+        await audit.record(
+          {
+            action: "workspace.updated",
+            outcome: success ? "success" : "failed",
+            reason: success ? undefined : "prompt_history_delete_failed",
+            targetType: "workspace",
+            targetId: response.locals.workspace.id,
+            workspaceId: response.locals.workspace.id,
+            metadata: {
+              slug: response.locals.workspace.slug,
+              changedFields: ["promptHistory"],
+            },
+          },
+          { response }
+        );
+        response.status(200).json({ success });
       } catch (error) {
         console.error("Error deleting prompt history:", error);
         response.sendStatus(500).end();

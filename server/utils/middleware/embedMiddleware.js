@@ -3,6 +3,36 @@ const { VALID_CHAT_MODE } = require("../chats/stream");
 const { EmbedChats } = require("../../models/embedChats");
 const { EmbedConfig } = require("../../models/embedConfig");
 const { reqBody } = require("../http");
+const { audit } = require("../audit");
+
+/**
+ * Records that the embed widget refused a request. Never throws: a refusal
+ * must still be sent if the audit write fails.
+ * @param {Object} request
+ * @param {Object} response
+ * @param {string} check - which rule refused it
+ */
+async function recordRejected(request, response, check) {
+  try {
+    await audit.record(
+      {
+        action: "embed.rejected",
+        outcome: "denied",
+        reason: check,
+        targetType: "embed",
+        targetId: response.locals.embedConfig?.id,
+        metadata: {
+          embedUuid: response.locals.embedConfig?.uuid,
+          origin: request.headers?.origin,
+          check,
+        },
+      },
+      { response }
+    );
+  } catch (e) {
+    console.error("[audit] embed.rejected not recorded:", e.message);
+  }
+}
 
 // Finds or Aborts request for a /:embedId/ url. This should always
 // be the first middleware and the :embedID should be in the URL.
@@ -42,7 +72,7 @@ async function validEmbedConfigId(request, response, next) {
 
 // Shared access checks for any request that touches an embed's chat data.
 // Responds and returns false if the request should not proceed.
-function passesEmbedAccessControl(request, response) {
+async function passesEmbedAccessControl(request, response) {
   const embed = response.locals.embedConfig;
   if (!embed) {
     response.sendStatus(404).end();
@@ -51,6 +81,7 @@ function passesEmbedAccessControl(request, response) {
 
   // Block if disabled by admin.
   if (!embed.enabled) {
+    await recordRejected(request, response, "disabled");
     response.status(503).json({
       id: uuidv4(),
       type: "abort",
@@ -73,6 +104,7 @@ function passesEmbedAccessControl(request, response) {
   // deny-all instead of allow-all, so an embed cannot be queried cross-origin
   // until its owner explicitly sets the allowed domains.
   if (allowedHosts === null && "EMBED_REQUIRE_ALLOWLIST" in process.env) {
+    await recordRejected(request, response, "allowlist_required");
     response.status(401).json({
       id: uuidv4(),
       type: "abort",
@@ -85,6 +117,7 @@ function passesEmbedAccessControl(request, response) {
   }
 
   if (allowedHosts !== null && !allowedHosts.includes(host)) {
+    await recordRejected(request, response, "origin_not_allowed");
     response.status(401).json({
       id: uuidv4(),
       type: "abort",
@@ -101,11 +134,12 @@ function passesEmbedAccessControl(request, response) {
 
 // Access control for the embed history routes (read/invalidate) where the
 // sessionId is a URL param and there is no message body.
-function canAccessHistory(request, response, next) {
-  if (!passesEmbedAccessControl(request, response)) return;
+async function canAccessHistory(request, response, next) {
+  if (!(await passesEmbedAccessControl(request, response))) return;
 
   const { sessionId } = request.params;
   if (typeof sessionId !== "string" || !validate(sessionId)) {
+    await recordRejected(request, response, "invalid_session");
     response.status(404).json({ error: "Invalid session ID." });
     return;
   }
@@ -115,11 +149,12 @@ function canAccessHistory(request, response, next) {
 
 async function canRespond(request, response, next) {
   try {
-    if (!passesEmbedAccessControl(request, response)) return;
+    if (!(await passesEmbedAccessControl(request, response))) return;
     const embed = response.locals.embedConfig;
 
     const { sessionId, message } = reqBody(request);
     if (typeof sessionId !== "string" || !validate(String(sessionId))) {
+      await recordRejected(request, response, "invalid_session");
       response.status(404).json({
         id: uuidv4(),
         type: "abort",
@@ -157,6 +192,7 @@ async function canRespond(request, response, next) {
       });
 
       if (dailyChatCount >= Number(embed.max_chats_per_day)) {
+        await recordRejected(request, response, "daily_quota");
         response.status(429).json({
           id: uuidv4(),
           type: "abort",
@@ -184,6 +220,7 @@ async function canRespond(request, response, next) {
       });
 
       if (dailySessionCount >= Number(embed.max_chats_per_session)) {
+        await recordRejected(request, response, "session_quota");
         response.status(429).json({
           id: uuidv4(),
           type: "abort",

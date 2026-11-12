@@ -2,7 +2,7 @@ const { v4: uuidv4 } = require("uuid");
 const { getVectorDbClass } = require("../utils/helpers");
 const prisma = require("../utils/prisma");
 const { Telemetry } = require("./telemetry");
-const { EventLogs } = require("./eventLogs");
+const { audit } = require("../utils/audit");
 const { safeJsonParse } = require("../utils/http");
 const { getModelTag } = require("../endpoints/utils");
 
@@ -237,18 +237,29 @@ const Document = {
       TTSSelection: process.env.TTS_PROVIDER || "native",
       LLMModel: getModelTag(),
     });
-    await EventLogs.logEvent(
-      "workspace_documents_added",
-      {
+    await audit.record({
+      action: "document.embedded",
+      outcome:
+        failedToEmbed.length > 0 && embedded.length === 0
+          ? "failed"
+          : "success",
+      reason:
+        failedToEmbed.length > 0 && embedded.length === 0
+          ? "embed_failed"
+          : undefined,
+      targetType: "workspace",
+      targetId: workspace?.id,
+      workspaceId: workspace?.id,
+      metadata: {
         workspaceName: workspace?.name || "Unknown Workspace",
-        numberOfDocumentsAdded: additions.length,
+        count: embedded.length,
+        docPaths: embedded,
       },
-      userId
-    );
+    });
     return { failedToEmbed, errors: Array.from(errors), embedded };
   },
 
-  removeDocuments: async function (workspace, removals = [], userId = null) {
+  removeDocuments: async function (workspace, removals = [], _userId = null) {
     const VectorDb = getVectorDbClass();
     if (removals.length === 0) return;
 
@@ -275,14 +286,17 @@ const Document = {
       }
     }
 
-    await EventLogs.logEvent(
-      "workspace_documents_removed",
-      {
+    await audit.record({
+      action: "document.removed",
+      targetType: "workspace",
+      targetId: workspace?.id,
+      workspaceId: workspace?.id,
+      metadata: {
         workspaceName: workspace?.name || "Unknown Workspace",
-        numberOfDocuments: removals.length,
+        count: removals.length,
+        docPaths: removals,
       },
-      userId
-    );
+    });
     return true;
   },
 

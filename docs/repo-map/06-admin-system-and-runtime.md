@@ -35,7 +35,7 @@ a narrow branding subset), the *runtime* itself (boot hooks, Bree jobs, in-proce
 |---|---|---|
 | Provider/secret config | `process.env` (live) mirrored to `server/.env` by `dumpENV` | `updateENV` (`server/utils/helpers/updateENV.js:1519`), `EncryptionManager` (`server/utils/EncryptionManager/index.js:38`), `/system/update-password`, `getCustomModels` side writes |
 | Instance settings | `system_settings` rows `{label, value}` (string values) | `SystemSettings._updateSettings` (`server/models/systemSettings.js:728`) |
-| Audit trail | `event_logs` | `EventLogs.logEvent` (`server/models/eventLogs.js:4`) |
+| Audit trail | `audit_events` (new rows) and legacy `event_logs` (read-only history, copied into `audit_events` as `legacy.<event>` by migration `20261111180000_audit_events`); outbox `storage/audit-outbox/<pid>.jsonl` | `audit.record` / `audit.recordOrFail` (`server/utils/audit/index.js`); `EventLogs.logEvent` is a wrapper that maps old event names to catalogue actions (`server/models/eventLogs.js:63`, `server/utils/audit/legacy.js`); see P-ADMIN-35 |
 | Telemetry | PostHog (remote) | `Telemetry.sendTelemetry` (`server/models/telemetry.js:89`) |
 | Keys | `storage/comkey/ipc-{priv,pub}.pem` (rolled every boot), `SIG_KEY`/`SIG_SALT` env, `storage/.../vapid-keys.json` | boot hooks |
 | Branding assets | `storage/assets/*` + `logo_filename` label | `/system/upload-logo` |
@@ -123,8 +123,8 @@ take effect on the next request without a cache flush.
 | `memory_enabled`, `memory_auto_extraction` (DB) | Adds/removes the `extract-memories` Bree job | `server/models/systemSettings.js:198-236`, `server/utils/BackgroundWorkers/index.js:178-197` |
 | `DisableTelemetry` (env) | Sends one final `telemetry_disabled` event; takes effect on next `client()` call | `server/utils/helpers/updateENV.js:631-639`, `server/models/telemetry.js:50` |
 | `meta_page_title`/`meta_page_favicon` (DB) | Clears index-page meta cache | `server/models/systemSettings.js:430-450` |
-| `DELETE /system/event-logs` | Deletes the entire audit trail | `server/endpoints/system.js:1175` |
-| `DELETE /system/workspace-chats/-1` | Hard-deletes every chat in the instance, no audit event | `server/endpoints/system.js:1224-1226` |
+| `DELETE /system/event-logs` | Deletes only legacy `event_logs` rows (`EventLogs.delete`, `server/models/eventLogs.js:152`); `audit_events` rows can't be deleted through the app; records `audit.cleared` via legacy `event_logs_cleared` (F-54, route removal planned for PR B) | `server/endpoints/system.js:1351-1358` |
+| `DELETE /system/workspace-chats/-1` | Hard-deletes every chat in the instance; records `chat.bulk_deleted` | `server/endpoints/system.js:1425` |
 | Any `updateENV` call in production | Rewrites `server/.env` from a fixed key allowlist; keys outside it are dropped from the file, values truncated at the first quote/`#`/whitespace-class char | `server/utils/helpers/updateENV.js:1573,1599-1733` |
 
 ## 3. Entry points
@@ -495,7 +495,7 @@ share `EMBEDDING_MODEL_PREF`. `validDockerizedUrl` probes a loopback port only w
 
 - **Actor:** as P-ADMIN-06. UI `/settings/llm-preference` (`frontend/src/utils/paths.js:119-120`).
 - **Steps:** P-ADMIN-06 with `LLMProvider` + provider keys. Hooks: `manageEngineOnProviderChange` starts embedded Lemonade (`prepareInBackground`) when moving onto it, or stops it without awaiting when moving off (`server/utils/AiProviders/embeddedLemonade/config.js:157-166`); Nvidia NIM path rewrite and token-limit lookup (`updateENV.js:920-941`); Foundry unload + context window refresh (`:967-978`).
-- **State changes:** `process.env.LLM_PROVIDER` etc.; `event_logs` row `update_llm_provider`.
+- **State changes:** `process.env.LLM_PROVIDER` etc.; `audit_events` rows `settings.changed` (key, masked from/to) and `vendor.changed` (`server/utils/helpers/updateENV.js:1628-1654`).
 - **Side effects:** `ENV`, `FS` (`.env`), `LOG`, `PROC` (embedded Lemonade), `NET:llm-provider` (NIM, Foundry), `CACHE` (Foundry context windows).
 - **Failure and edge paths:** an invalid later key leaves the provider switched but unconfigured (partial apply, P-ADMIN-06).
 - **Notes:** workspaces with their own `chatProvider` are unaffected (precedence table). No router cache invalidation runs on `LLMProvider`/`ModelRouterId` changes; router state is keyed by router id (`server/utils/router/index.js:70`), so switching `MODEL_ROUTER_ID` naturally selects a different cache entry.
@@ -660,8 +660,8 @@ share `EMBEDDING_MODEL_PREF`. `validDockerizedUrl` probes a loopback port only w
 ### P-ADMIN-25 Event logs: read and clear
 
 - **Actor:** admin. UI `/settings/event-logs`.
-- **Steps:** `POST /api/system/event-logs {offset, limit}` → `EventLogs.whereWithData({}, limit, offset*limit, {id:"desc"})` + `count()` (`server/endpoints/system.js:1148-1168`, `server/models/eventLogs.js:79-100`); `DELETE /api/system/event-logs` → `EventLogs.delete()` (all rows) then logs `event_logs_cleared` (`server/endpoints/system.js:1170-1187`).
-- **State changes:** `event_logs` all rows deleted; one new row.
+- **Steps:** `POST /api/system/event-logs {offset, limit}` → `EventLogs.whereWithData({}, limit, offset*limit, {id:"desc"})` + `count()`, which now read `audit_events` and reshape each row to the old `{event, metadata, userId, occurredAt}` form (`server/endpoints/system.js:1320-1345`, `server/models/eventLogs.js:5-37,95-146`); the read records `audit.viewed`. `DELETE /api/system/event-logs` → `EventLogs.delete()` deletes legacy `event_logs` rows only, then records `audit.cleared` through legacy `event_logs_cleared` (`server/endpoints/system.js:1349-1363`, `server/models/eventLogs.js:152-163`).
+- **State changes:** `event_logs` all rows deleted (the copies in `audit_events` stay); one new `audit_events` row.
 - **Side effects:** `DB`, `LOG`.
 - **Notes:** `whereWithData` issues one `User.get` per log row (N+1, `server/models/eventLogs.js:90-93`). `limit` has only a lower bound (`server/endpoints/system.js:1155`).
 
@@ -760,6 +760,24 @@ No `sendTelemetry` call exists in `collector/` (grep).
 - **Steps:** `POST /api/v/:command` invokes any own property of the vector DB class with the request body (`:163-178`).
 - **Side effects:** `VEC` (arbitrary, including `delete-namespace`), no auth.
 
+### P-ADMIN-35 Audit trail writer (added with the audit-logging PR A)
+
+- **Actor:** every route, job and boot hook; no user action starts it.
+- **Steps:**
+  1. `app.use(audit.middleware)` runs before every route: gives the request an id (sent back as `X-Request-Id`), the channel (from the path), IP and user agent, held in `response.locals.audit` and an AsyncLocalStorage store; the actor is read at record time (`server/index.js:68`, `server/utils/audit/context.js:80-81`).
+  2. A handler calls `audit.record(event, {response})` or `audit.recordOrFail` for `must_record` actions. The action must be in the catalogue (`server/utils/audit/catalogue.js`); unknown actions throw; metadata keys not allowed for the action are dropped (`sanitize.js`) (`server/utils/audit/index.js`).
+  3. The row is inserted into `audit_events`; on failure it is appended and fsynced to `storage/audit-outbox/<pid>.jsonl` and flushed 30 s later or at the next boot; if both fail a `must_record` action throws `AuditError` (`recordOrFail` answers 500) (`server/utils/audit/index.js:155-165,218-242`, `outbox.js`).
+  4. Prisma middleware (`$use`) notes writes to sensitive tables; when the request or job ends, a table written with no covering catalogue action gets one `db.write` row (table, operation, count). Writes outside a request or job are pooled and flushed each minute (`server/utils/audit/backstop.js`, installed at `server/utils/prisma/index.js:14`).
+  5. Boot: `auditBoot` flushes the outbox, instruments vendor provider classes, records `system.boot` (version, multi-user flag, `NODE_ENV`) and registers SIGTERM/SIGINT handlers that flush vendor counts and record `system.shutdown` (`server/utils/audit/boot.js`, called from `server/utils/boot/index.js:36,71`).
+  6. Vendor inventory: the provider folders (LLM, embedder, vector DB, TTS, STT, image and others) are wrapped once at boot; each call is counted by vendor, channel and hour, and one `vendor.data_sent` row per group is written on flush (`server/utils/audit/vendors.js`).
+  7. Settings: `updateENV` records `settings.changed` per changed key (secrets masked) and `vendor.changed` for vendor settings, plus a failed `settings.changed` for the key that stopped the batch (`server/utils/helpers/updateENV.js:1628-1654`); `SystemSettings._updateSettings` records `settings.changed` (`server/models/systemSettings.js:794`).
+  8. Logs: console output goes through `scrubSecrets` and carries `[req:<id>]` (`server/utils/logger/index.js:3,28-38`).
+- **Reads:** request context, `audit_events` (only by the Event Logs page and `EventLogs.where`).
+- **State changes:** `audit_events` rows created; `storage/audit-outbox/<pid>.jsonl` written and removed after a flush.
+- **Side effects:** `DB`, `FS`, `LOG`, `TIME` (30 s outbox flush, 1 min backstop flush, hourly vendor flush; all `unref`'d timers).
+- **Failure and edge paths:** an outbox flush that crashes after the insert and before deleting the file inserts the rows again on the next flush (at-least-once, `outbox.js` header). Denials are rate-limited to 20 rows per actor, action and reason per minute (`server/utils/audit/index.js:41-53`).
+- **Notes:** the route declarations in `server/utils/audit/routes/*.js` list, per route, which actions it records; `held.js` lists routes in files other branches still edit (`legacy` entries use `EventLogs.logEvent`, `pending` entries have no row yet). A route-coverage test fails when a state-changing route is undeclared.
+
 ## 5. State machines
 
 **Instance mode** (`system_settings.multi_user_mode`): `unset/false` → `true` via P-ADMIN-24 (`server/endpoints/system.js:693-695`); `true` → `false` only in that route's catch (`:717-719`). No other transition.
@@ -803,43 +821,49 @@ No `sendTelemetry` call exists in `collector/` (grep).
 | SE-ADMIN-15 | P-ADMIN-03 | FS | collector storage wipe | `collector/index.js:227` | no | |
 | SE-ADMIN-16 | P-ADMIN-06 | ENV | `process.env.<key>` | `server/utils/helpers/updateENV.js:1563` | yes (re-save) | partial apply on error |
 | SE-ADMIN-17 | P-ADMIN-06, P-ADMIN-23, P-ADMIN-28 | FS, ENV | `server/.env` rewrite | `server/utils/helpers/updateENV.js:1599-1733` | no | drops non-allowlisted keys, truncates values |
-| SE-ADMIN-18 | P-ADMIN-06 | LOG | `update_llm_provider`, `update_embedding_engine`, `update_vector_db` | `server/utils/helpers/updateENV.js:1584-1597` | n/a | |
+| SE-ADMIN-18 | P-ADMIN-06 | LOG | `audit_events: settings.changed` per key (secrets masked) and `vendor.changed` for vendor settings; the old `update_*` events are gone | `server/utils/helpers/updateENV.js:1628,1641,1654` | n/a | a failed key records `settings.changed` with outcome `failed` |
 | SE-ADMIN-19 | P-ADMIN-07 | PROC | embedded Lemonade stop/start | `server/utils/AiProviders/embeddedLemonade/config.js:157-166` | yes | stop not awaited |
 | SE-ADMIN-20 | P-ADMIN-07 | NET:foundry, CACHE | unload previous model, refresh windows | `server/utils/helpers/updateENV.js:967-978` | yes | |
 | SE-ADMIN-21 | P-ADMIN-07 | NET:nvidia-nim, ENV | base path rewrite, token limit | `server/utils/helpers/updateENV.js:920-941` | yes | |
 | SE-ADMIN-22 | P-ADMIN-08, P-ADMIN-09 | FS | `storage/vector-cache` purge | `server/utils/vectorStore/resetAllVectorStores.js:20` | no | |
 | SE-ADMIN-23 | P-ADMIN-08, P-ADMIN-09 | DB | `document_vectors`, `workspace_documents` all rows | `server/utils/vectorStore/resetAllVectorStores.js:21-22` | no | re-embed required |
 | SE-ADMIN-24 | P-ADMIN-08, P-ADMIN-09 | VEC | every workspace namespace / pgvector table | `server/utils/vectorStore/resetAllVectorStores.js:33-49` | no | previous DB for VectorDB change |
-| SE-ADMIN-25 | P-ADMIN-08, P-ADMIN-09 | LOG | `workspace_vectors_reset` | `server/utils/vectorStore/resetAllVectorStores.js:23` | n/a | |
+| SE-ADMIN-25 | P-ADMIN-08, P-ADMIN-09 | LOG | `audit_events: workspace.vectors_reset` | `server/utils/vectorStore/resetAllVectorStores.js:24` | n/a | |
 | SE-ADMIN-26 | P-ADMIN-08 | NET:huggingface (**unverified** host), FS | native embedder model download | `server/utils/helpers/updateENV.js:1440-1449` | yes | |
 | SE-ADMIN-27 | P-ADMIN-09 | NET:postgres, ENV | PGVector validation, early env set | `server/utils/helpers/updateENV.js:1471-1513` | yes | |
 | SE-ADMIN-28 | P-ADMIN-11 | ENV | provider key env vars set from unsaved form input | `server/utils/helpers/customModels.js:305,379,425,...,1497` | yes | persisted by next dumpENV |
 | SE-ADMIN-29 | P-ADMIN-11, P-ADMIN-12 | NET:llm-provider | model listing / pull / delete at admin-supplied base path, with stored bearer key | `server/utils/helpers/customModels.js:82-210`, `server/endpoints/utils/lemonadeUtilsEndpoints.js:34-46,132-140` | n/a | |
 | SE-ADMIN-30 | P-ADMIN-12 | WS | SSE download progress | `server/endpoints/utils/lemonadeUtilsEndpoints.js:28-32`, `server/utils/AiProviders/embeddedLemonade/endpoints.js:61-65` | n/a | |
-| SE-ADMIN-31 | P-ADMIN-14 | DB | `system_settings.<label>` upsert | `server/models/systemSettings.js:743-757` | yes | no event log |
+| SE-ADMIN-31 | P-ADMIN-14 | DB | `system_settings.<label>` upsert | `server/models/systemSettings.js:743-757` | yes | `audit_events: settings.changed` per changed label (`server/models/systemSettings.js:794`); free text is named, not stored |
 | SE-ADMIN-32 | P-ADMIN-14 | FS | `vector-cache` purge on chunk size/overlap save | `server/models/systemSettings.js:127-128,142-143` | no | runs even if unchanged |
 | SE-ADMIN-33 | P-ADMIN-14, P-ADMIN-16 | CACHE | `MetaGenerator.clearConfig()` | `server/models/systemSettings.js:437,448` | yes | |
 | SE-ADMIN-34 | P-ADMIN-14, P-ADMIN-21 | CACHE | Gmail/Calendar/Outlook bridge `.reset()` | `server/models/systemSettings.js:300,343,396`, `server/endpoints/utils/outlookAgentUtils.js:180` | yes | |
 | SE-ADMIN-35 | P-ADMIN-14, P-ADMIN-22 | TIME, PROC | add/remove `extract-memories` | `server/utils/BackgroundWorkers/index.js:178-197` | yes | no-op if Bree stopped |
 | SE-ADMIN-36 | P-ADMIN-16 | FS, DB | `storage/assets/*`, `logo_filename` | `server/endpoints/system.js:989-995,1026-1030` | yes (re-upload) | |
 | SE-ADMIN-37 | P-ADMIN-18 | TEL | `telemetry_disabled` | `server/utils/helpers/updateENV.js:636` | no | last event before opt-out |
-| SE-ADMIN-38 | P-ADMIN-19 | DB, TEL, LOG | `experimental_live_file_sync`, `experimental_feature_enabled` | `server/endpoints/experimental/liveSync.js:36-45` | yes | |
+| SE-ADMIN-38 | P-ADMIN-19 | DB, TEL, LOG | `experimental_live_file_sync`, `experimental_feature_enabled`; `audit_events: feature.toggled` | `server/endpoints/experimental/liveSync.js:36-45`, audit at `:52` | yes | |
 | SE-ADMIN-39 | P-ADMIN-19 | PROC, TIME | whole BackgroundService boot (second Bree) or stop (all jobs, timers, `bree=null`) | `server/models/documentSyncQueue.js:42-48`, `server/utils/BackgroundWorkers/index.js:106-163` | until restart | breaks embedding/telegram/scheduled jobs when disabled |
 | SE-ADMIN-40 | P-ADMIN-20 | NET:sql-db | test connection | `server/endpoints/system.js:1604` | n/a | |
 | SE-ADMIN-41 | P-ADMIN-21 | DB, NET:microsoft | `outlook_agent_config` create/delete | `server/endpoints/utils/outlookAgentUtils.js:21-187` | yes | single-user only |
 | SE-ADMIN-42 | P-ADMIN-23 | ENV, FS | `AUTH_TOKEN`, `JWT_SECRET` | `server/endpoints/system.js:634-654` | yes | invalidates sessions |
 | SE-ADMIN-43 | P-ADMIN-24 | DB | `users`, `system_settings.multi_user_mode`, ownership columns in 7 tables, whitelist delete | `server/endpoints/system.js:679-703` | no | catch deletes all users |
 | SE-ADMIN-44 | P-ADMIN-24 | ENV, FS | `JWT_SECRET` ensured | `server/endpoints/system.js:704-709` | n/a | |
-| SE-ADMIN-45 | P-ADMIN-24 | TEL, LOG | `enabled_multi_user_mode`, `multi_user_mode_enabled` | `server/endpoints/system.js:710-713` | n/a | |
-| SE-ADMIN-46 | P-ADMIN-25 | DB, LOG | `event_logs` deleteMany + `event_logs_cleared` | `server/endpoints/system.js:1175-1180` | no | audit trail lost |
-| SE-ADMIN-47 | P-ADMIN-26 | DB | `workspace_chats` deleteMany (one or all) | `server/endpoints/system.js:1224-1226` | no | not logged |
-| SE-ADMIN-48 | P-ADMIN-26 | LOG | `exported_chats` | `server/endpoints/system.js:1246-1253` | n/a | |
+| SE-ADMIN-45 | P-ADMIN-24 | TEL, LOG | `enabled_multi_user_mode`; `audit_events: multi_user.enabled` (legacy `multi_user_mode_enabled`) | `server/endpoints/system.js:850-854` | n/a | |
+| SE-ADMIN-46 | P-ADMIN-25 | DB, LOG | legacy `event_logs` deleteMany + `audit_events: audit.cleared` (legacy `event_logs_cleared`) | `server/endpoints/system.js:1351-1358`; `server/models/eventLogs.js:152-163` | no | `audit_events` rows survive; route removal planned for PR B (F-54) |
+| SE-ADMIN-47 | P-ADMIN-26 | DB, LOG | `workspace_chats` deleteMany (one or all); `audit_events: chat.deleted` / `chat.bulk_deleted` | `server/endpoints/system.js:1425,1431` | no | |
+| SE-ADMIN-48 | P-ADMIN-26 | LOG | `audit_events: chat.exported` | `server/endpoints/system.js:1465` | n/a | |
 | SE-ADMIN-49 | P-ADMIN-27 | DB | system prompt variables | `server/endpoints/system.js:1460,1496,1529` | yes | |
 | SE-ADMIN-50 | P-ADMIN-29 | FS | direct uploads, generated files, generated images deleted | `server/jobs/cleanup-orphan-documents.js:82`, `server/jobs/cleanup-generated-files.js:45-54`, `server/jobs/cleanup-generated-images.js:37-44` | no | |
 | SE-ADMIN-51 | P-ADMIN-31 | PROC, DB | scheduled job / embedding / telegram workers | `server/utils/BackgroundWorkers/index.js:219-236,439-475` | n/a | |
 | SE-ADMIN-52 | P-ADMIN-32 | TEL, NET:posthog | all catalogue events | `server/models/telemetry.js:114-118` | no | |
 | SE-ADMIN-53 | P-ADMIN-34 | VEC | arbitrary vector DB command | `server/index.js:163-178` | no | development only |
 | SE-ADMIN-54 | P-ADMIN-01 | FS | `storage/plugins/anythingllm_mcp_servers.json` created on first MCP use | `server/utils/MCP/hypervisor/index.js:87-95` | yes | lazy, not at boot |
+| SE-ADMIN-55 | P-ADMIN-35 | DB, LOG | `audit_events` row per `audit.record` | `server/utils/audit/index.js` | no (no delete path in the app) | |
+| SE-ADMIN-56 | P-ADMIN-35 | FS | `storage/audit-outbox/<pid>.jsonl` append + fsync on a failed insert; flushed after 30 s and at boot | `server/utils/audit/outbox.js`; `server/utils/audit/index.js:155-165` | yes | at-least-once |
+| SE-ADMIN-57 | P-ADMIN-35 | DB, LOG | `audit_events: db.write` backstop row for a sensitive-table write with no covering action | `server/utils/audit/backstop.js`; `server/utils/prisma/index.js:14` | no | a row here means a missing catalogue event |
+| SE-ADMIN-58 | P-ADMIN-35, P-ADMIN-01 | LOG | `audit_events: system.boot`; `system.shutdown` on SIGTERM/SIGINT | `server/utils/audit/boot.js`; `server/utils/boot/index.js:36,71` | no | |
+| SE-ADMIN-59 | P-ADMIN-35 | LOG, TIME | `audit_events: vendor.data_sent` hourly counts per vendor, channel and hour (no content); timer flush | `server/utils/audit/vendors.js` | no | provider classes wrapped at boot |
+| SE-ADMIN-60 | P-ADMIN-35 | LOG | `audit_events: audit.viewed` when the Event Logs page is read | `server/endpoints/system.js:1336` | no | |
 
 ## 7. Cross-domain links
 

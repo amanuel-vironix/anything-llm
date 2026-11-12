@@ -27,6 +27,8 @@ logs/server.log
 storage/lancedb
 public/
 __tests__/*/**/models/
+# The audit outbox, when a test points STORAGE_DIR at its own folder.
+__tests__/*/**/audit-outbox/
 
 # For legacy copies of repo
 documents

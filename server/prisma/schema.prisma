@@ -307,6 +307,36 @@ model event_logs {
   @@index([event])
 }
 
+// Audit trail (PLAN-audit-logging-and-compliance.md section 3.1). Written only
+// through server/utils/audit; event_logs stays for reading older rows.
+model audit_events {
+  id           Int      @id @default(autoincrement())
+  occurred_at  DateTime @default(now())
+  action       String // catalogue name, area.verb
+  outcome      String   @default("success") // success | denied | failed
+  reason       String?
+  actor_type   String // user | api_key | system | job | telegram_chat | embed_session | mobile_device | extension_key | oidc | unknown
+  actor_id     String?
+  on_behalf_of Int?
+  team_id      Int?
+  workspace_id Int?
+  target_type  String?
+  target_id    String?
+  channel      String // ui | api | openai | embed | telegram | mobile | extension | ws | job | boot | system | unknown
+  ip           String?
+  user_agent   String?
+  request_id   String?
+  metadata     String? // JSON, allow-listed keys only
+  prev_hash    String? // hash chain, filled from PR B
+  hash         String?
+
+  @@index([occurred_at])
+  @@index([action])
+  @@index([actor_type, actor_id])
+  @@index([on_behalf_of])
+  @@index([workspace_id])
+}
+
 model slash_command_presets {
   id            Int      @id @default(autoincrement())
   command       String

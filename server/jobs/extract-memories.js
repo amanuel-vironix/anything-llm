@@ -3,7 +3,7 @@ const { SystemSettings } = require("../models/systemSettings.js");
 const { Memory } = require("../models/memory.js");
 const { WorkspaceChats } = require("../models/workspaceChats.js");
 const { Workspace } = require("../models/workspace.js");
-const truncate = require("truncate");
+const { audit } = require("../utils/audit");
 const {
   groupByUserWorkspace,
   loadLatestChats,
@@ -125,16 +125,14 @@ async function processGroup(groupChats) {
     if (candidates === null || candidates.length === 0) {
       log(`Observer produced no candidates for ${tag}.`);
       if (observerRaw)
-        log(`Observer raw response:\n${truncate(observerRaw, 2000)}`);
+        log(`Observer raw response was ${observerRaw.length} character(s).`);
       if (candidates === null)
         log(
           `(Tool handler was never called — model may not have produced a tool call.)`
         );
       return;
     }
-    log(`Observer produced ${candidates.length} candidate(s) for ${tag}:`);
-    for (const c of candidates)
-      log(`  [${c.confidence}] "${c.content}" — ${c.reasoning}`);
+    log(`Observer produced ${candidates.length} candidate(s) for ${tag}.`);
 
     log(`Running Reflector for ${tag} with ${candidates.length} candidate(s).`);
     const reflectorMessage = buildReflectorUserMessage(
@@ -152,7 +150,7 @@ async function processGroup(groupChats) {
     if (finalMemories === null || finalMemories.length === 0) {
       log(`Reflector produced no actionable memories for ${tag}.`);
       if (reflectorRaw)
-        log(`Reflector raw response:\n${truncate(reflectorRaw, 2000)}`);
+        log(`Reflector raw response was ${reflectorRaw.length} character(s).`);
       if (finalMemories === null)
         log(
           `(Tool handler was never called — model may not have produced a tool call.)`
@@ -160,10 +158,10 @@ async function processGroup(groupChats) {
       return;
     }
 
-    log(`Reflector approved ${finalMemories.length} memory/ies for ${tag}:`);
+    log(`Reflector approved ${finalMemories.length} memory/ies for ${tag}.`);
     for (const m of finalMemories)
       log(
-        `  [${m.scope}/${m.action}${m.action === "update" ? `#${m.updateId}` : ""}] "${m.content}" — ${m.reasoning}`
+        `  [${m.scope}/${m.action}${m.action === "update" ? `#${m.updateId}` : ""}]`
       );
 
     const result = await Memory.applyExtractedMemories(
@@ -173,7 +171,27 @@ async function processGroup(groupChats) {
       globalSlots
     );
     log(
-      `Applied ${result.workspaceCount} workspace + ${result.globalCount} global + ${result.updatedCount} updated memories for ${tag} in "${workspace.name}". Reviewed ${chats.length} chat(s).`
+      `Applied ${result.workspaceCount} workspace + ${result.globalCount} global + ${result.updatedCount} updated memories for ${tag} (workspace ${workspaceId}). Reviewed ${chats.length} chat(s).`
+    );
+    await audit.runAs(
+      {
+        actorType: "job",
+        actorId: "extract-memories",
+        onBehalfOf: userId,
+        channel: "job",
+      },
+      () =>
+        audit.record({
+          action: "memory.extracted",
+          targetType: "memory",
+          workspaceId,
+          metadata: {
+            created: result.workspaceCount + result.globalCount,
+            updated: result.updatedCount,
+            candidates: candidates.length,
+            workspaceId,
+          },
+        })
     );
   } catch (error) {
     log(`Error processing ${tag}: ${error.message}`);

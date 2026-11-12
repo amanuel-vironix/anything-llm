@@ -1,6 +1,6 @@
 const { EmbedChats } = require("../models/embedChats");
 const { EmbedConfig } = require("../models/embedConfig");
-const { EventLogs } = require("../models/eventLogs");
+const { audit } = require("../utils/audit");
 const { reqBody, userFromSession, toBoundedInt } = require("../utils/http");
 const { validEmbedConfigId } = require("../utils/middleware/embedMiddleware");
 const {
@@ -11,6 +11,14 @@ const { validatedRequest } = require("../utils/middleware/validatedRequest");
 const {
   chatHistoryViewable,
 } = require("../utils/middleware/chatHistoryViewable");
+
+// validEmbedConfigId puts the embed in response.locals, which the audit
+// context would read as an embed-widget visitor. These routes are admin
+// actions, so name the admin as the actor.
+const adminActor = (response) => ({
+  type: "user",
+  id: response.locals?.user?.id ?? null,
+});
 
 function embedManagementEndpoints(app) {
   if (!app) return;
@@ -39,11 +47,22 @@ function embedManagementEndpoints(app) {
         const user = await userFromSession(request, response);
         const data = reqBody(request);
         const { embed, message: error } = await EmbedConfig.new(data, user?.id);
-        await EventLogs.logEvent(
-          "embed_created",
-          { embedId: embed.id },
-          user?.id
-        );
+        if (embed) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "embed.created",
+                actor: adminActor(response),
+                targetType: "embed",
+                targetId: embed.id,
+                workspaceId: embed.workspace_id,
+                metadata: { embedUuid: embed.uuid },
+              },
+              response
+            ))
+          )
+            return;
+        }
         response.status(200).json({ embed, error });
       } catch (e) {
         console.error(e);
@@ -57,11 +76,29 @@ function embedManagementEndpoints(app) {
     [validatedRequest, flexUserRoleValid([ROLES.admin]), validEmbedConfigId],
     async (request, response) => {
       try {
-        const user = await userFromSession(request, response);
         const { embedId } = request.params;
         const updates = reqBody(request);
         const { success, error } = await EmbedConfig.update(embedId, updates);
-        await EventLogs.logEvent("embed_updated", { embedId }, user?.id);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "embed.updated",
+              actor: adminActor(response),
+              outcome: success === false ? "failed" : "success",
+              reason: success === false ? "update_failed" : undefined,
+              targetType: "embed",
+              targetId: embedId,
+              metadata: {
+                embedUuid: response.locals.embedConfig?.uuid,
+                changedFields: Object.keys(updates || {}).filter((key) =>
+                  EmbedConfig.writable.includes(key)
+                ),
+              },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ success, error });
       } catch (e) {
         console.error(e);
@@ -77,11 +114,19 @@ function embedManagementEndpoints(app) {
       try {
         const { embedId } = request.params;
         await EmbedConfig.delete({ id: Number(embedId) });
-        await EventLogs.logEvent(
-          "embed_deleted",
-          { embedId },
-          response?.locals?.user?.id
-        );
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "embed.deleted",
+              actor: adminActor(response),
+              targetType: "embed",
+              targetId: embedId,
+              metadata: { embedUuid: response.locals.embedConfig?.uuid },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ success: true, error: null });
       } catch (e) {
         console.error(e);
@@ -106,6 +151,20 @@ function embedManagementEndpoints(app) {
         );
         const totalChats = await EmbedChats.count();
         const hasPages = totalChats > (offset + 1) * limit;
+        // Embed chats belong to widget visitors; the admin reading them is
+        // recorded before any of it is returned.
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.viewed_other_user",
+              actor: adminActor(response),
+              targetType: "embed_chats",
+              metadata: { count: embedChats.length },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ chats: embedChats, hasPages, totalChats });
       } catch (e) {
         console.error(e);
@@ -120,7 +179,26 @@ function embedManagementEndpoints(app) {
     async (request, response) => {
       try {
         const { chatId } = request.params;
-        await EmbedChats.delete({ id: Number(chatId) });
+        const chat = await EmbedChats.get({ id: Number(chatId) });
+        const embed = chat
+          ? await EmbedConfig.get({ id: Number(chat.embed_id) })
+          : null;
+        const deleted = await EmbedChats.delete({ id: Number(chatId) });
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "embed.chats_deleted",
+              actor: adminActor(response),
+              outcome: deleted ? "success" : "failed",
+              reason: deleted ? undefined : "delete_failed",
+              targetType: "embed_chat",
+              targetId: chatId,
+              metadata: { embedUuid: embed?.uuid, count: chat ? 1 : 0 },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ success: true, error: null });
       } catch (e) {
         console.error(e);

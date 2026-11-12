@@ -973,7 +973,7 @@ Code: `websocket.js:254-364`, `http-socket.js:118-230`, `run-scheduled-job.js:77
 | SE-AGENT-41 | P-AGENT-30 | DB, PROC | `readAt`; `scheduled-jobs` workspace/thread/chat created; SIGTERM workers | `scheduledJobRun.js:329-385`; `BackgroundWorkers/index.js:368-382` | yes (delete) | |
 | SE-AGENT-42 | P-AGENT-31 | NET:llm-provider | Observer + Reflector runs over the last 20 chats | `jobs/helpers/memory-extraction-utils.js:135,263` | no | |
 | SE-AGENT-43 | P-AGENT-31/32 | DB | `memories` create/update/delete/promote/demote; `workspace_chats.memoryProcessed` | `models/memory.js:98-260,345`; `models/workspaceChats.js:306` | yes (UI delete) | |
-| SE-AGENT-44 | P-AGENT-31 | LOG | memory candidate and final content in worker log | `jobs/extract-memories.js:135-137,163-167` | no | personal data in logs |
+| SE-AGENT-44 | P-AGENT-31 | LOG | worker log now holds counts and ids only (F-41 fixed in 912a0c28); `audit_events: memory.extracted` (created, updated, candidates counts) with a job actor acting on behalf of the user | `server/jobs/extract-memories.js:135,137,185` | no | no memory text in logs or audit rows |
 | SE-AGENT-45 | P-AGENT-33 | DB / FS | `users.web_push_subscription_config` or `storage/push-notifications/primary-subscription.json`; `vapid-keys.json` at boot | `PushNotifications/index.js:146-166,201-222` | overwrite | |
 | SE-AGENT-46 | P-AGENT-34 | FS | delete unreferenced files > 1 h in `storage/generated-files`, `storage/generated-images` | `jobs/cleanup-generated-files.js:22-51`; `jobs/cleanup-generated-images.js:18-45` | no | partial scan error → over-deletion |
 | SE-AGENT-47 | E-AGENT-22/23/24 | TIME | Bree jobs (cleanup 8/9/12 hr, memory extraction 3 hr), scheduled-job timers | `BackgroundWorkers/index.js:29-61,106-143,178-197,274-309` | yes (setting toggle) | |
@@ -981,6 +981,12 @@ Code: `websocket.js:254-364`, `http-socket.js:118-230`, `run-scheduled-job.js:77
 | SE-AGENT-49 | P-AGENT-37/38 | LOG | `tool_refused_by_policy`, `model_refused_by_policy` | `server/utils/accessPolicy/index.js:110,133`, `server/utils/agents/index.js:686` | no | fire-and-forget |
 | SE-AGENT-50 | P-AGENT-39 | DB | `system_settings.agent_tool_role_policy` upsert | `server/endpoints/accessPolicies.js:187` | yes | LOG `role_default_updated` |
 | SE-AGENT-51 | P-AGENT-39 | DB | `access_policies.agent_tools` update / policy create, `teams.policy_id` set | `server/utils/accessPolicy/toolSharing.js:108` | yes | LOG `policy_updated` |
+| SE-AGENT-52 | P-AGENT-28 | LOG | `audit_events: scheduled_job.created` / `updated` / `deleted` / `run` (trigger, approve and reject runs) | `server/endpoints/scheduledJobs.js:109,201,287,315,364,396` | no | no row before |
+| SE-AGENT-53 | P-AGENT-31/32 | LOG | `audit_events: memory.created` / `updated` (also promote and demote) / `deleted` | `server/endpoints/memory.js:95,134,164,195,232` | no | no row before |
+| SE-AGENT-54 | MCP server toggle, delete, tool toggle (UI) | LOG | `audit_events: mcp.server_started` / `mcp.server_stopped` / `mcp.server_removed` / `mcp.tool_toggled` | `server/endpoints/mcpServers.js:71,106,145` | no | the `/v1/mcp-servers` equivalents are in SE-EXT-58 |
+| SE-AGENT-55 | agent flows | LOG | `audit_events: flow.created` / `flow.updated` / `flow.deleted` | `server/endpoints/agentFlows.js:43,174,225` | no | no row before |
+| SE-AGENT-56 | imported agent plugins, skill whitelist | LOG | `audit_events: skill.enabled` / `skill.disabled` / `skill.configured` / `skill.removed`; `agent.whitelist_added` | `server/endpoints/experimental/imported-agent-plugins.js:27,59,92`; `server/endpoints/agentSkillWhitelist.js:95` | no | no row before |
+| SE-AGENT-57 | agent websocket session (P-AGENT-14 area) | LOG | not recorded: `agent.session_started` / `agent.session_ended` are declared pending for the access-policy branch (`server/utils/audit/routes/held.js`) | `server/endpoints/agentWebsocket.js` | n/a | |
 
 ## 7. Cross-domain links
 

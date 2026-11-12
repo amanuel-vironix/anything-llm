@@ -82,6 +82,8 @@ const { isReservedCommand } = require("../utils/chats");
 const { AgentSkillWhitelist } = require("../models/agentSkillWhitelist");
 const { Memory } = require("../models/memory");
 const { dummyHashCompare } = require("../utils/helpers/dummyHashCompare");
+const { audit } = require("../utils/audit");
+const { PasswordResetToken } = require("../models/passwordRecovery");
 
 function systemEndpoints(app) {
   if (!app) return;
@@ -115,6 +117,7 @@ function systemEndpoints(app) {
 
   app.post("/onboarding", [validatedRequest], async (_, response) => {
     try {
+      // settings.changed is recorded by SystemSettings._updateSettings.
       await SystemSettings.markOnboardingComplete();
       response.sendStatus(200).end();
     } catch (e) {
@@ -465,6 +468,34 @@ function systemEndpoints(app) {
           recoveryCodes
         );
 
+        // Never record the username or the codes: the row says only that a
+        // recovery was tried and how it ended.
+        const user = success
+          ? await User.get({ username: String(username) })
+          : null;
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "auth.recovery_used",
+              actor: user ? { type: "user", id: user.id } : undefined,
+              outcome: success
+                ? "success"
+                : error === "Invalid recovery codes."
+                  ? "denied"
+                  : "failed",
+              reason: success
+                ? undefined
+                : error === "Invalid recovery codes."
+                  ? "invalid_codes"
+                  : "recovery_failed",
+              targetType: user ? "user" : undefined,
+              targetId: user?.id,
+            },
+            response
+          ))
+        )
+          return;
+
         if (success) {
           response.status(200).json({ success, resetToken });
         } else {
@@ -485,11 +516,48 @@ function systemEndpoints(app) {
     async (request, response) => {
       try {
         const { token, newPassword, confirmPassword } = reqBody(request);
-        const { success, message } = await resetPassword(
-          token,
-          newPassword,
-          confirmPassword
-        );
+        // Read the token's owner first: resetPassword deletes the token.
+        const tokenRow = await PasswordResetToken.findUnique({
+          token: String(token),
+        });
+        const userId = tokenRow?.user_id ?? null;
+        const target = {
+          actor: userId ? { type: "user", id: userId } : undefined,
+          targetType: userId ? "user" : undefined,
+          targetId: userId,
+        };
+        let outcome;
+        try {
+          outcome = await resetPassword(token, newPassword, confirmPassword);
+        } catch (e) {
+          // Bad input (empty or mismatched passwords): record, then fail as before.
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "auth.password_reset",
+                ...target,
+                outcome: "failed",
+                reason: "invalid_request",
+              },
+              response
+            ))
+          )
+            return;
+          throw e;
+        }
+        const { success, message } = outcome;
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "auth.password_reset",
+              ...target,
+              outcome: success ? "success" : "failed",
+              reason: success ? undefined : "rejected",
+            },
+            response
+          ))
+        )
+          return;
 
         if (success) {
           response.status(200).json({ success, message });
@@ -528,6 +596,18 @@ function systemEndpoints(app) {
       try {
         const { name } = reqBody(request);
         await purgeDocument(name);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "document.deleted",
+              targetType: "document",
+              targetId: name,
+              metadata: { docName: name, count: 1 },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -543,6 +623,17 @@ function systemEndpoints(app) {
       try {
         const { names } = reqBody(request);
         for await (const name of names) await purgeDocument(name);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "document.deleted",
+              targetType: "document",
+              metadata: { docPaths: names, count: names.length },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -558,6 +649,18 @@ function systemEndpoints(app) {
       try {
         const { name } = reqBody(request);
         await purgeFolder(name);
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "document.deleted",
+              targetType: "document_folder",
+              targetId: name,
+              metadata: { docName: name },
+            },
+            response
+          ))
+        )
+          return;
         response.sendStatus(200).end();
       } catch (e) {
         console.error(e.message, e);
@@ -677,6 +780,17 @@ function systemEndpoints(app) {
       try {
         // Cannot update password in multi - user mode.
         if (multiUserMode(response)) {
+          if (
+            !(await audit.recordOrFail(
+              {
+                action: "auth.password_changed",
+                outcome: "denied",
+                reason: "multi_user_mode",
+              },
+              response
+            ))
+          )
+            return;
           response.sendStatus(401).end();
           return;
         }
@@ -693,6 +807,17 @@ function systemEndpoints(app) {
           // placeholder, so updateENV would silently drop it while JWT_SECRET
           // still rotates - reject it before mutating anything.
           if (/^\*+$/.test(String(newPassword))) {
+            if (
+              !(await audit.recordOrFail(
+                {
+                  action: "auth.password_changed",
+                  outcome: "failed",
+                  reason: "invalid_password",
+                },
+                response
+              ))
+            )
+              return;
             response.status(200).json({
               success: false,
               error: "Password cannot consist of only asterisks (*).",
@@ -708,6 +833,22 @@ function systemEndpoints(app) {
           );
           error = update?.error;
         }
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "auth.password_changed",
+              outcome: error ? "failed" : "success",
+              // The catalogue has no field for "password turned off".
+              reason: error
+                ? "update_failed"
+                : !usePassword
+                  ? "password_disabled"
+                  : undefined,
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ success: !error, error });
       } catch (e) {
         console.error(e.message, e);
@@ -924,6 +1065,21 @@ function systemEndpoints(app) {
           pfpFilename: uploadedFileName,
         });
 
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "user.updated",
+              outcome: success ? "success" : "failed",
+              reason: success ? undefined : "update_failed",
+              targetType: "user",
+              targetId: user.id,
+              metadata: { changedFields: ["pfpFilename"] },
+            },
+            response
+          ))
+        )
+          return;
+
         return response.status(success ? 200 : 500).json({
           message: success
             ? "Profile picture uploaded successfully."
@@ -969,6 +1125,7 @@ function systemEndpoints(app) {
         const { success, error } = await SystemSettings.updateSettings({
           default_system_prompt: defaultSystemPrompt,
         });
+        // settings.changed is recorded by SystemSettings (key only, no text).
         if (!success)
           throw new Error(
             error.message || "Failed to update default system prompt."
@@ -1010,6 +1167,21 @@ function systemEndpoints(app) {
         const { success, error } = await User.update(user.id, {
           pfpFilename: null,
         });
+
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "user.updated",
+              outcome: success ? "success" : "failed",
+              reason: success ? undefined : "update_failed",
+              targetType: "user",
+              targetId: user.id,
+              metadata: { changedFields: ["pfpFilename"] },
+            },
+            response
+          ))
+        )
+          return;
 
         return response.status(success ? 200 : 500).json({
           message: success
@@ -1224,6 +1396,14 @@ function systemEndpoints(app) {
         const totalLogs = await EventLogs.count();
         const hasPages = totalLogs > (offset + 1) * limit;
 
+        await audit.record(
+          {
+            action: "audit.viewed",
+            targetType: "event_logs",
+            metadata: { filter: { offset, limit }, count: logs.length },
+          },
+          { response }
+        );
         response.status(200).json({ logs: logs, hasPages, totalLogs });
       } catch (e) {
         console.error(e);
@@ -1272,6 +1452,19 @@ function systemEndpoints(app) {
         const totalChats = await WorkspaceChats.count();
         const hasPages = totalChats > (offset + 1) * limit;
 
+        // An admin or manager reading every user's chats: record before
+        // anything is returned, and return nothing if the record can't be kept.
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.viewed_other_user",
+              targetType: "workspace_chats",
+              metadata: { count: chats.length, filter: { offset, limit } },
+            },
+            response
+          ))
+        )
+          return;
         response.status(200).json({ chats: chats, hasPages, totalChats });
       } catch (e) {
         console.error(e);
@@ -1286,9 +1479,31 @@ function systemEndpoints(app) {
     async (request, response) => {
       try {
         const { id } = request.params;
-        Number(id) === -1
+        const all = Number(id) === -1;
+        const deleted = all
           ? await WorkspaceChats.delete({}, true)
           : await WorkspaceChats.delete({ id: Number(id) });
+        if (
+          !(await audit.recordOrFail(
+            all
+              ? {
+                  action: "chat.bulk_deleted",
+                  outcome: deleted ? "success" : "failed",
+                  reason: deleted ? undefined : "delete_failed",
+                  targetType: "workspace_chats",
+                }
+              : {
+                  action: "chat.deleted",
+                  outcome: deleted ? "success" : "failed",
+                  reason: deleted ? undefined : "delete_failed",
+                  targetType: "chat",
+                  targetId: Number(id),
+                  metadata: { count: 1 },
+                },
+            response
+          ))
+        )
+          return;
         response.json({ success: true, error: null });
       } catch (e) {
         console.error(e);
@@ -1308,14 +1523,18 @@ function systemEndpoints(app) {
       try {
         const { type = "jsonl", chatType = "workspace" } = request.query;
         const { contentType, data } = await exportChatsAsType(type, chatType);
-        await EventLogs.logEvent(
-          "exported_chats",
-          {
-            type,
-            chatType,
-          },
-          response.locals.user?.id
-        );
+        // Record before the data leaves; no data is sent if the record fails.
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "chat.exported",
+              targetType: "workspace_chats",
+              metadata: { format: type, filter: { chatType } },
+            },
+            response
+          ))
+        )
+          return;
         response.setHeader("Content-Type", contentType);
         response.status(200).send(data);
       } catch (e) {
@@ -1354,6 +1573,37 @@ function systemEndpoints(app) {
       }
 
       const { success, error } = await User.update(id, updates);
+      // Field names only; never the values (username, password, bio).
+      const changedFields = Object.keys(updates);
+      if (
+        !(await audit.recordOrFail(
+          {
+            action: "user.updated",
+            outcome: success ? "success" : "failed",
+            reason: success ? undefined : "update_failed",
+            targetType: "user",
+            targetId: id,
+            metadata: { changedFields },
+          },
+          response
+        ))
+      )
+        return;
+      if (updates.password) {
+        if (
+          !(await audit.recordOrFail(
+            {
+              action: "auth.password_changed",
+              outcome: success ? "success" : "failed",
+              reason: success ? undefined : "update_failed",
+              targetType: "user",
+              targetId: id,
+            },
+            response
+          ))
+        )
+          return;
+      }
       response.status(200).json({ success, error });
     } catch (e) {
       console.error(e);

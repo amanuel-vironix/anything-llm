@@ -24,6 +24,8 @@ const JWT = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { captureRoutes } = require("../helpers/routeHarness");
 const { startFakeOidcProvider } = require("../helpers/fakeOidcProvider");
+const { lastAudit } = require("../helpers/auditEvents");
+const { EventLogs } = require("../../models/eventLogs");
 const { oidcEndpoints } = require("../../endpoints/auth/oidc");
 const { systemEndpoints } = require("../../endpoints/system");
 const { saveOidcSettings } = require("../../utils/auth/oidcSettings");
@@ -90,11 +92,20 @@ async function swap(token) {
   });
 }
 
-async function lastEvent(event) {
-  return prisma.event_logs.findFirst({
-    where: { event },
-    orderBy: { id: "desc" },
-  });
+// logEvent writes audit_events through the legacy map: failed_login_oidc is
+// auth.login_failed (method oidc, reason in its own column), login_event is
+// auth.login_succeeded.
+const lastOidcFailure = () =>
+  lastAudit(prisma, "auth.login_failed", (r) => r.meta.method === "oidc");
+
+// The verification error the handler passed to the logger on the last
+// refusal. The spy passes calls through, so rows are still written.
+const logSpy = jest.spyOn(EventLogs, "logEvent");
+function detailFor() {
+  const call = [...logSpy.mock.calls]
+    .reverse()
+    .find(([event]) => event === "failed_login_oidc");
+  return call?.[1]?.detail;
 }
 
 beforeAll(async () => {
@@ -102,9 +113,10 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  logSpy.mockClear();
   resetOidcClientCache();
   for (const table of [
-    "event_logs",
+    "audit_events",
     "temporary_auth_tokens",
     "user_identities",
     "invites",
@@ -169,7 +181,9 @@ describe("callback: new and returning users", () => {
       subject: "google-sub-1",
       email: "jane@vironix.ai",
     });
-    expect(await lastEvent("login_event")).toBeTruthy();
+    const login = await lastAudit(prisma, "auth.login_succeeded");
+    expect(login.meta.method).toBe("oidc");
+    expect(login.target_id).toBe(String(user.id));
   });
 
   it("gives the new account an unusable password", async () => {
@@ -261,9 +275,7 @@ describe("callback: new and returning users", () => {
 
     expect(refusalFrom(res)).toBe("suspended");
     expect(await prisma.temporary_auth_tokens.count()).toBe(0);
-    expect(JSON.parse((await lastEvent("failed_login_oidc")).metadata).reason).toBe(
-      "suspended"
-    );
+    expect((await lastOidcFailure()).reason).toBe("suspended");
   });
 
   it("takes the post-login address from settings, not from the Host header", async () => {
@@ -297,9 +309,13 @@ describe("callback: refusals", () => {
     expect(refusalFrom(res)).toBe(reason);
     expect(await prisma.users.count()).toBe(0);
     expect(await prisma.temporary_auth_tokens.count()).toBe(0);
-    const metadata = JSON.parse((await lastEvent("failed_login_oidc")).metadata);
-    expect(metadata.reason).toBe(reason);
-    if (detail) expect(metadata.detail).toMatch(detail);
+    const failure = await lastOidcFailure();
+    expect(failure.reason).toBe(reason);
+    // Only the email's domain is kept, never the address. The audit row
+    // drops the verification error (it can quote the email), so `detail` is
+    // checked on the handler's own result instead.
+    expect(failure.metadata || "").not.toMatch(/jane@/);
+    if (detail) expect(detailFor()).toMatch(detail);
   });
 
   it.each([

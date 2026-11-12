@@ -86,8 +86,17 @@ async function call(user, method, route, body) {
   return { status: res.status, body: json };
 }
 
+// logEvent writes audit_events through server/utils/audit/legacy.js; these
+// are the catalogue actions the team routes' legacy names map to.
+const ACTION_FOR = {
+  team_member_added: "team.member_added",
+  team_member_removed: "team.member_removed",
+  team_lead_changed: "team.lead_changed",
+  team_workspace_created: "workspace.created",
+  policy_assigned: "policy.assigned",
+};
 async function eventCount(event) {
-  return prisma.event_logs.count({ where: { event } });
+  return prisma.audit_events.count({ where: { action: ACTION_FOR[event] } });
 }
 
 /** A team with one lead; returns { team, lead }. */

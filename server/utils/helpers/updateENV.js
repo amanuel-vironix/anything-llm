@@ -1524,6 +1524,8 @@ async function updateENV(newENVs = {}, force = false, userId = null) {
     (key) => validKeys.includes(key) && !/^\*+$/.test(newENVs[key]) // strip out answers where the value is all asterisks (masked placeholder)
   );
   const newValues = {};
+  const applied = []; // [{ key, envKey, prevValue, nextValue }] in order
+  let failedKey = null;
 
   for (const key of ENV_KEYS) {
     const {
@@ -1542,6 +1544,7 @@ async function updateENV(newENVs = {}, force = false, userId = null) {
     // exit early.
     if (errors.length > 0) {
       error += errors.join("\n");
+      failedKey = key;
       break;
     }
 
@@ -1556,11 +1559,13 @@ async function updateENV(newENVs = {}, force = false, userId = null) {
     // exit early.
     if (errors.length > 0) {
       error += errors.join("\n");
+      failedKey = key;
       break;
     }
 
     newValues[key] = nextValue;
     process.env[envKey] = nextValue;
+    applied.push({ key, envKey, prevValue, nextValue });
 
     for (const postUpdateFunc of postUpdate)
       await postUpdateFunc(key, prevValue, nextValue);
@@ -1569,7 +1574,8 @@ async function updateENV(newENVs = {}, force = false, userId = null) {
   for (const runAfterAllFunc of runAfterAll)
     await runAfterAllFunc(newValues, userId);
 
-  await logChangesToEventLog(newValues, userId);
+  const auditError = await recordSettingsChanges(applied, failedKey, userId);
+  if (auditError) error += `${error ? "\n" : ""}${auditError}`;
   if (process.env.NODE_ENV === "production") dumpENV();
   return { newValues, error: error?.length > 0 ? error : false };
 }
@@ -1581,19 +1587,88 @@ async function executeValidationChecks(checks, value, force) {
   return results.filter((err) => typeof err === "string");
 }
 
-async function logChangesToEventLog(newValues = {}, userId = null) {
-  const { EventLogs } = require("../../models/eventLogs");
-  const eventMapping = {
-    LLMProvider: "update_llm_provider",
-    EmbeddingEngine: "update_embedding_engine",
-    VectorDB: "update_vector_db",
-  };
+// Settings whose change sends data to a different vendor (plan section 4.6).
+const VENDOR_SETTINGS = {
+  LLMProvider: "llm",
+  EmbeddingEngine: "embedder",
+  VectorDB: "vector_db",
+  ImageGenerationProvider: "image_generation",
+  WhisperProvider: "transcription",
+  TextToSpeechProvider: "text_to_speech",
+  SpeechToTextProvider: "speech_to_text",
+  AgentSearchApiEngine: "web_search",
+  AgentSerpApiEngine: "web_search",
+  DisableTelemetry: "telemetry",
+};
 
-  for (const [key, eventName] of Object.entries(eventMapping)) {
-    if (!newValues.hasOwnProperty(key)) continue;
-    await EventLogs.logEvent(eventName, {}, userId);
+/**
+ * Records what `updateENV` actually applied (SMF-10: a request can be applied
+ * in part): one `settings.changed` per applied key with old and new values,
+ * secrets masked to their last 4 characters; one `failed` row naming the key
+ * that stopped the run; and `vendor.changed` when a provider setting moved.
+ * @returns {Promise<string|null>} an error to report if a must_record row
+ *   couldn't be written
+ */
+async function recordSettingsChanges(applied = [], failedKey = null, userId) {
+  const { audit, AuditError } = require("../audit");
+  const { currentContext } = require("../audit/context");
+  const { isSecretName, maskSecret } = require("../audit/sanitize");
+  // Inside a request the context names the actor; otherwise use the caller.
+  const actor =
+    !currentContext() && userId ? { type: "user", id: userId } : undefined;
+  const show = (key, envKey, value) =>
+    isSecretName(key) || isSecretName(envKey)
+      ? maskSecret(value)
+      : value ?? null;
+
+  try {
+    for (const { key, envKey, prevValue, nextValue } of applied) {
+      if (prevValue === nextValue) continue;
+      await audit.record({
+        action: "settings.changed",
+        actor,
+        targetType: "setting",
+        targetId: key,
+        metadata: {
+          key,
+          from: show(key, envKey, prevValue),
+          to: show(key, envKey, nextValue),
+          source: "env",
+        },
+      });
+      if (VENDOR_SETTINGS[key])
+        await audit.record({
+          action: "vendor.changed",
+          actor,
+          targetType: "setting",
+          targetId: key,
+          metadata: {
+            kind: VENDOR_SETTINGS[key],
+            from: prevValue ?? null,
+            to: nextValue ?? null,
+          },
+        });
+    }
+    if (failedKey)
+      await audit.record({
+        action: "settings.changed",
+        actor,
+        outcome: "failed",
+        reason: "validation_failed",
+        targetType: "setting",
+        targetId: failedKey,
+        metadata: {
+          failedKey,
+          applied: applied.map((a) => a.key),
+          source: "env",
+        },
+      });
+    return null;
+  } catch (e) {
+    if (!(e instanceof AuditError)) throw e;
+    console.error(e.message);
+    return "Settings were saved but could not be recorded in the audit log.";
   }
-  return;
 }
 
 function dumpENV() {

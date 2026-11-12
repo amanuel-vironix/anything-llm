@@ -5,6 +5,7 @@ const { isSingleUserMode } = require("../utils/middleware/multiUserProtected");
 const { reqBody, safeJsonParse } = require("../utils/http");
 const { BackgroundService } = require("../utils/BackgroundWorkers");
 const { Telemetry } = require("../models/telemetry");
+const { audit } = require("../utils/audit");
 
 // BackgroundService is a singleton, so `new BackgroundService()` anywhere in
 // the codebase returns the same instance that `server/index.js` booted. We
@@ -103,6 +104,15 @@ function scheduledJobEndpoints(app) {
           backgroundService.killRun(run.jobId, run.id);
           // Windows terminates workers without running their SIGTERM handler.
           await ScheduledJobRun.kill(run.id);
+          await audit.record(
+            {
+              action: "scheduled_job.run",
+              targetType: "scheduled_job",
+              targetId: run.jobId,
+              metadata: { jobId: run.jobId, runId: run.id, status: "killed" },
+            },
+            { response }
+          );
           return response.status(200).json({ success: true });
         }
       } catch {
@@ -186,6 +196,15 @@ function scheduledJobEndpoints(app) {
 
         backgroundService.addScheduledJob(job);
         Telemetry.sendTelemetry("scheduled_job_created").catch(() => {});
+        await audit.record(
+          {
+            action: "scheduled_job.created",
+            targetType: "scheduled_job",
+            targetId: job.id,
+            metadata: { jobId: job.id, name: job.name },
+          },
+          { response }
+        );
         return response.status(201).json({ job, error: null });
       } catch (e) {
         console.error(e.message, e);
@@ -263,6 +282,15 @@ function scheduledJobEndpoints(app) {
         }
 
         await backgroundService.syncScheduledJob(job.id);
+        await audit.record(
+          {
+            action: "scheduled_job.updated",
+            targetType: "scheduled_job",
+            targetId: job.id,
+            metadata: { jobId: job.id, changedFields: Object.keys(updates) },
+          },
+          { response }
+        );
 
         return response.status(200).json({ job, error: null });
       } catch (e) {
@@ -281,6 +309,16 @@ function scheduledJobEndpoints(app) {
         backgroundService.removeScheduledJob(Number(request.params.id));
 
         const success = await ScheduledJob.delete(Number(request.params.id));
+        if (success)
+          await audit.record(
+            {
+              action: "scheduled_job.deleted",
+              targetType: "scheduled_job",
+              targetId: Number(request.params.id),
+              metadata: { jobId: Number(request.params.id) },
+            },
+            { response }
+          );
         return response.status(200).json({ success });
       } catch (e) {
         console.error(e.message, e);
@@ -321,6 +359,15 @@ function scheduledJobEndpoints(app) {
         });
 
         await backgroundService.syncScheduledJob(job.id);
+        await audit.record(
+          {
+            action: "scheduled_job.updated",
+            targetType: "scheduled_job",
+            targetId: job.id,
+            metadata: { jobId: job.id, changedFields: ["enabled"] },
+          },
+          { response }
+        );
 
         return response.status(200).json({ job: updated });
       } catch (e) {
@@ -344,6 +391,19 @@ function scheduledJobEndpoints(app) {
         }
 
         const run = await backgroundService.enqueueScheduledJob(job.id);
+        await audit.record(
+          {
+            action: "scheduled_job.run",
+            targetType: "scheduled_job",
+            targetId: job.id,
+            metadata: {
+              jobId: job.id,
+              runId: run?.id,
+              status: run ? "triggered" : "skipped",
+            },
+          },
+          { response }
+        );
         return response
           .status(200)
           .json({ success: true, skipped: !run, error: null });
