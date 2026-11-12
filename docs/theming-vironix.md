@@ -98,13 +98,40 @@ when the admin hasn't enforced one.
 | inverse surface `#132033` | `zinc-925` (sidebar) |
 | dark surface `#16263A` | `zinc-900` (content, chat) |
 | dark surface-muted `#1B2C42` | `zinc-800` (inputs, menus) |
+| ink-faint `#8B95A5` | `zinc-500` (muted dark-mode text, kept at 4.7:1 or more) |
 | light canvas `#FBFAF8` | `slate-50` (light page container) |
 | dark primary `#8FB4FF` / hover `#B9D0FF` | `sky-400` / `sky-300` (dark-mode buttons) |
 | light primary `#046DDB` / hover `#0458B0` | `sky-500` / `sky-600` (light-mode buttons) |
 | ink / ink-muted | `--theme-text-primary` / `--theme-text-secondary` (light and dark) |
 | Libre Franklin | `--theme-font-sans` |
 
+### Branding assets
+
+- `frontend/src/media/logo/vironix-logo-on-{dark,light}.png` (sidebar) and
+  `vironix-mark-on-{dark,light}.png` (login) are the defaults in `LogoContext.jsx`.
+- `server/storage/assets/anything-llm.png` (dark mode) and `anything-llm-invert.png`
+  (light mode) keep their filenames, because the logo-settings code and the database seed
+  key off them, but now hold the Vironix wordmark. Existing deployments with a persisted
+  `STORAGE_DIR/assets` keep their old files until replaced; an admin can also upload a
+  logo under Settings → Customization → Branding.
+- `frontend/public/favicon.png` / `favicon.ico` show the V mark.
+- AnythingLLM attribution stays: the MIT `LICENSE`, the "AnythingLLM" palette, the
+  AnythingLLM icon on built-in provider entries, and the in-app copy and page title
+  (rename through custom branding if wanted).
+
+### Known differences from the site
+
+- Primary actions on the login screen and in onboarding hard-code
+  `bg-white` (dark) / `light:bg-sky-200` (light) in each component, so they render as
+  white or pale-blue-tint buttons rather than solid `#046DDB`. Matching the site exactly
+  would mean editing every such component instead of the palette, so they were left as is.
+  Their contrast passes AA.
+- Headings use Libre Franklin, not Newsreader (see Type).
+
 ## Contrast (WCAG 2.x)
+
+Checked by a computed-style scan of all visible text on login, chat, UI preferences, LLM
+preference and users pages in both modes: no text below AA.
 
 | Pair | Ratio | AA (4.5 text, 3 UI) |
 | --- | --- | --- |

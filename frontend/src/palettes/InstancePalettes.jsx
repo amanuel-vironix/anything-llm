@@ -5,6 +5,7 @@ import Admin from "@/models/admin";
 import showToast from "@/utils/toast";
 import { useTheme } from "@/hooks/useTheme";
 import {
+  FALLBACK_PALETTE,
   PALETTE_SEEDS,
   copyPaletteColors,
   listPalettes,
@@ -104,9 +105,12 @@ function PaletteSettings({ draft, setDraft }) {
     setEditing(null);
   }
 
-  /** The default palette can only be enforced when it is not the stock one. */
+  /**
+   * Stores the chosen key, including FALLBACK_PALETTE, so any palette can be
+   * enforced. Only an unset default (null) cannot be enforced.
+   */
   function setDefault(key) {
-    const defaultPalette = key === "default" ? null : key;
+    const defaultPalette = key;
     if (defaultPalette === draft.defaultPalette) return;
     commit("palettes", {
       ...draft,
@@ -140,7 +144,7 @@ function PaletteSettings({ draft, setDraft }) {
             key={key}
             name={name}
             colors={colors}
-            selected={(draft.defaultPalette ?? "default") === key}
+            selected={(draft.defaultPalette ?? FALLBACK_PALETTE) === key}
             onClick={() => setDefault(key)}
             actions={
               isInstance && (

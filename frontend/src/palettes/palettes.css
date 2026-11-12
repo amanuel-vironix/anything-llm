@@ -108,3 +108,40 @@ left alone, the regenerated scales keep their contrast.
 :root[data-palette]:not([data-palette="default"]) body {
   background-color: var(--theme-bg-container);
 }
+
+/*
+Vironix palette (docs/theming-vironix.md). Beyond the generated scales it sets
+the brand font and the site's ink colors. The stock light-mode secondary text
+(#7a7d7e, 4.1:1 on white) fails WCAG AA; Vironix ink-muted is 7.5:1.
+*/
+:root[data-palette="vironix"] {
+  --theme-font-sans: "Libre Franklin";
+  --theme-text-primary: #f4f6f9;
+  --theme-text-secondary: rgb(244 246 249 / 0.72);
+  --theme-home-text: #f4f6f9;
+  --theme-home-text-secondary: rgb(244 246 249 / 0.72);
+  --theme-sidebar-border: rgb(244 246 249 / 0.16);
+  --theme-settings-input-text: #f4f6f9;
+  --theme-settings-input-placeholder: rgb(244 246 249 / 0.58);
+  --theme-button-primary-hover: rgb(var(--palette-zinc-700));
+}
+
+:root[data-palette="vironix"][data-theme="light"] {
+  --theme-text-primary: #1d2632;
+  --theme-text-secondary: #48566a;
+  --theme-home-text: #1d2632;
+  --theme-home-text-secondary: #48566a;
+  --theme-sidebar-item-text-inactive: #48566a;
+  --theme-sidebar-item-text-active: #046ddb;
+  --theme-sidebar-item-workspace-active: #1d2632;
+  --theme-sidebar-item-workspace-inactive: #48566a;
+  --theme-sidebar-border: rgb(29 38 50 / 0.14);
+  --theme-modal-border: rgb(29 38 50 / 0.14);
+  --theme-chat-input-border: rgb(29 38 50 / 0.14);
+  --theme-settings-input-text: #1d2632;
+  --theme-settings-input-placeholder: #5f6b7d;
+  --theme-placeholder: #5f6b7d;
+  --theme-button-primary-hover: rgb(var(--palette-slate-200));
+  --theme-home-button-primary: rgb(var(--palette-sky-500));
+  --theme-home-button-primary-hover: rgb(var(--palette-sky-600));
+}

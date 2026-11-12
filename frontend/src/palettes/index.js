@@ -15,6 +15,12 @@ export const PALETTE_SEEDS = ["main", "accent"];
  */
 
 /**
+ * The palette used when the admin has not chosen an instance default.
+ * This fork ships the Vironix look as its default, see docs/theming-vironix.md.
+ */
+export const FALLBACK_PALETTE = "vironix";
+
+/**
  * Built-in palettes. "default" is never applied - it leaves the stock
  * Tailwind colors untouched - its colors only seed a new instance palette.
  * `shades` replaces generated steps outright, for looks a hue alone cannot
@@ -22,7 +28,29 @@ export const PALETTE_SEEDS = ["main", "accent"];
  * @type {Record<string, {name: string, shades?: Record<string, string>} & PaletteColors>}
  */
 const BUILT_IN_PALETTES = {
-  default: { name: "Default", main: "#71717a", accent: "#0ea5e9" },
+  // Vironix brand colors from vironix.ai. The shades pin the site's exact
+  // surfaces and its per-mode primary blue, which a single accent hue cannot
+  // reach (dark mode uses a light periwinkle, light mode a deep blue).
+  vironix: {
+    name: "Vironix",
+    main: "#1d2632",
+    accent: "#046ddb",
+    shades: {
+      "zinc-950": "16 27 43",
+      "zinc-925": "19 32 51",
+      "zinc-900": "22 38 58",
+      "zinc-800": "27 44 66",
+      // Muted dark-mode text (text-zinc-500), lifted to the site's ink-faint so
+      // it stays AA (4.7:1 or more) on every dark surface above.
+      "zinc-500": "139 149 165",
+      "slate-50": "251 250 248",
+      "sky-300": "185 208 255",
+      "sky-400": "143 180 255",
+      "sky-500": "4 109 219",
+      "sky-600": "4 88 176",
+    },
+  },
+  default: { name: "AnythingLLM", main: "#71717a", accent: "#0ea5e9" },
   // Pure black page background with near-black surfaces, for OLED screens.
   "true-dark": {
     name: "True Dark",
@@ -138,7 +166,7 @@ export function listPalettes(instance) {
 
 /**
  * Resolves which palette is active. An enforced instance default always wins,
- * then the user's choice, then the instance default, then the stock theme.
+ * then the user's choice, then the instance default, then FALLBACK_PALETTE.
  * @param {typeof state} paletteState
  * @returns {string}
  */
@@ -146,7 +174,7 @@ export function resolvePalette({ choice, instance }) {
   const keys = listPalettes(instance).map(({ key }) => key);
   const instanceDefault = keys.includes(instance?.defaultPalette)
     ? instance.defaultPalette
-    : "default";
+    : FALLBACK_PALETTE;
   if (instance?.enforced) return instanceDefault;
   return keys.includes(choice) ? choice : instanceDefault;
 }

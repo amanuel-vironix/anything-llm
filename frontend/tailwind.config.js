@@ -196,6 +196,7 @@ export default {
       },
       fontFamily: {
         sans: [
+          "var(--theme-font-sans)",
           "plus-jakarta-sans",
           "ui-sans-serif",
           "system-ui",
