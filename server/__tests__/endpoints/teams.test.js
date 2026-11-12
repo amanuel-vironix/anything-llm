@@ -426,6 +426,21 @@ describe("sharing a skill with one team (AC 32)", () => {
     await call(admin, "POST", "/admin/agent-tool-role-policy", {});
   });
 
+  it("leaves teams without their own rule alone when sharing (no policies created for them)", async () => {
+    const admin = await makeUser({ role: "admin" });
+    await call(admin, "POST", "/admin/agent-tool-role-policy", {});
+    const [shared, bystander] = [await makeTeam(), await makeTeam()];
+    const res = await call(admin, "POST", "/admin/agent-tool-sharing", {
+      tool: "sql-agent",
+      teamIds: [shared.id],
+    });
+    expect(res.status).toBe(200);
+    const bystanderRow = await prisma.teams.findUnique({
+      where: { id: bystander.id },
+    });
+    expect(bystanderRow.policy_id).toBeNull();
+  });
+
   it("rejects an invalid role default rule", async () => {
     const admin = await makeUser({ role: "admin" });
     const res = await call(admin, "POST", "/admin/agent-tool-role-policy", {

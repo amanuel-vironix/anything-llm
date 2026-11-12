@@ -85,22 +85,23 @@ async function toolSharingForTeams(tool) {
   return out;
 }
 
-async function uniquePolicyName(base) {
+async function uniquePolicyName(db, base) {
   let name = base;
-  for (
-    let i = 2;
-    await prisma.access_policies.findUnique({ where: { name } });
-    i++
-  )
+  for (let i = 2; await db.access_policies.findUnique({ where: { name } }); i++)
     name = `${base} (${i})`;
   return name;
 }
 
 /**
- * Offer `tool` to exactly the teams in `teamIds`, and stop offering it to the others
- * that have their own rule. Returns what changed. A policy also used by other teams or
- * by individual users changes for them too; `sharedPolicies` lists those so the UI can
- * warn.
+ * Offer `tool` to the teams in `teamIds`, and stop offering it to the other teams that
+ * have their own tool rule. Teams with no rule of their own and not in `teamIds` are
+ * left alone: they follow the `default` role rule, so to keep a tool from them, deny it
+ * there. A team being given the tool with no rule of its own starts from a copy of the
+ * `default` role rule (a new "Team: <name>" policy if it has none); that copy then
+ * applies to every member of the team, managers included, and no longer follows later
+ * role-default changes. A policy also used by other teams or by individual users
+ * changes for them too; `sharedPolicies` lists those so the UI can warn. All writes
+ * happen in one transaction.
  * @param {string} tool
  * @param {number[]} teamIds
  * @param {number|null} actorId
@@ -110,58 +111,65 @@ async function setToolTeams(tool, teamIds = [], actorId = null) {
     return { error: "A tool name is required." };
   const wanted = new Set(teamIds.map(Number));
   const defaults = await getRoleDefaults();
-  const teams = await prisma.teams.findMany();
-  const known = new Set(teams.map((t) => t.id));
-  for (const id of wanted)
-    if (!known.has(id)) return { error: `Team ${id} does not exist.` };
 
-  const changed = [];
-  const sharedPolicies = [];
-  for (const team of teams) {
-    const share = wanted.has(team.id);
-    const policy = team.policy_id
-      ? await prisma.access_policies.findUnique({
-          where: { id: team.policy_id },
-        })
-      : null;
-    const ownRule = policy?.agent_tools
-      ? parseToolRule(policy.agent_tools)
-      : null;
-    const current = ownRule ?? defaults.default ?? null;
-    if (ruleAllowsTool(current, tool) === share) continue;
+  return await prisma.$transaction(async (tx) => {
+    const teams = await tx.teams.findMany();
+    const known = new Set(teams.map((t) => t.id));
+    for (const id of wanted)
+      if (!known.has(id)) return { error: `Team ${id} does not exist.` };
 
-    const next = share ? grantTool(current, tool) : revokeTool(current, tool);
-    if (ownRule && sameRule(ownRule, next)) continue;
+    const changed = [];
+    const sharedPolicies = [];
+    for (const team of teams) {
+      const share = wanted.has(team.id);
+      const policy = team.policy_id
+        ? await tx.access_policies.findUnique({
+            where: { id: team.policy_id },
+          })
+        : null;
+      const ownRule = policy?.agent_tools
+        ? parseToolRule(policy.agent_tools)
+        : null;
+      if (!share && !ownRule) continue;
+      const current = ownRule ?? defaults.default ?? null;
+      if (ruleAllowsTool(current, tool) === share) continue;
 
-    if (policy) {
-      const others =
-        (await prisma.users.count({ where: { policy_id: policy.id } })) +
-        (await prisma.teams.count({
-          where: { policy_id: policy.id, id: { not: team.id } },
-        }));
-      if (others > 0) sharedPolicies.push({ policyId: policy.id, others });
-      await prisma.access_policies.update({
-        where: { id: policy.id },
-        data: { agent_tools: JSON.stringify(next), lastUpdatedAt: new Date() },
-      });
-    } else {
-      const created = await prisma.access_policies.create({
-        data: {
-          name: await uniquePolicyName(`Team: ${team.name}`),
-          description: `Created when sharing agent tools with team ${team.name}.`,
-          allowed_models: null,
-          agent_tools: JSON.stringify(next),
-          created_by: actorId ? Number(actorId) : null,
-        },
-      });
-      await prisma.teams.update({
-        where: { id: team.id },
-        data: { policy_id: created.id, lastUpdatedAt: new Date() },
-      });
+      const next = share ? grantTool(current, tool) : revokeTool(current, tool);
+      if (ownRule && sameRule(ownRule, next)) continue;
+
+      if (policy) {
+        const others =
+          (await tx.users.count({ where: { policy_id: policy.id } })) +
+          (await tx.teams.count({
+            where: { policy_id: policy.id, id: { not: team.id } },
+          }));
+        if (others > 0) sharedPolicies.push({ policyId: policy.id, others });
+        await tx.access_policies.update({
+          where: { id: policy.id },
+          data: {
+            agent_tools: JSON.stringify(next),
+            lastUpdatedAt: new Date(),
+          },
+        });
+      } else {
+        const created = await tx.access_policies.create({
+          data: {
+            name: await uniquePolicyName(tx, `Team: ${team.name}`),
+            description: `Created when sharing agent tools with team ${team.name}.`,
+            allowed_models: null,
+            agent_tools: JSON.stringify(next),
+            created_by: actorId ? Number(actorId) : null,
+          },
+        });
+        await tx.teams.update({
+          where: { id: team.id },
+          data: { policy_id: created.id, lastUpdatedAt: new Date() },
+        });
+      }
+      changed.push({ teamId: team.id, shared: share });
     }
-    changed.push({ teamId: team.id, shared: share });
-  }
-  return { changed, sharedPolicies, error: null };
+    return { changed, sharedPolicies, error: null };
+  });
 }
 
 module.exports = {

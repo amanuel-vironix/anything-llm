@@ -75,8 +75,11 @@ detach it (Teams page, or `POST /admin/workspaces/:slug/team`).
 
 **Team leads** can, for their own team only:
 
-- add active users with the `default` role who are on no team, and remove members;
-- make a member a lead, or a lead a member;
+- add active users with the `default` role who are on no team, and remove
+  default-role members (not themselves, and not managers or admins an admin put on
+  the team). Removing someone lifts the team policy from them: they fall back to
+  their own policy or the role default, so keep the role default as the floor;
+- make a default-role member a lead, or a lead a member;
 - create team workspaces and edit their prompt, temperature, history, similarity, topN,
   chat mode and refusal text (not the provider or model);
 - create and edit prompt variables and edit slash commands shared with the team.
@@ -89,7 +92,9 @@ unless an admin removes them. Every lead action is in the event log
 
 **Deleting a team** removes the memberships (members fall back to their own policy or
 role default), makes the team's workspaces admin-only (add people back directly if
-needed), and returns shared commands and variables to their owners.
+needed), returns shared slash commands to their owners, and deletes the team's prompt
+variables (they are not made global). A member who leaves a team takes their shared
+slash commands back with them.
 
 Admins and managers still see every workspace; teams don't narrow that.
 
@@ -98,8 +103,11 @@ Admins and managers still see every workspace; teams don't narrow that.
 To give one team a skill nobody else gets: deny it in the `default` role rule, then in
 Access policies → "Share a tool with teams" tick that team. This edits the team policy's
 rule (starting from the `default` role rule if the team had none, so the team gains only
-that tool), and creates a policy for a team that has none (with no model restriction). If
-the team's policy is also used by other teams or users, they get the change too; the page
+that tool), and creates a policy for a team that has none (with no model restriction).
+Unticked teams lose the tool only if they have a tool rule of their own; teams without
+one keep following the role default. The copied rule applies to everyone on the team,
+managers included, and stops following later changes to the role default. If the
+team's policy is also used by other teams or users, they get the change too; the page
 warns you.
 
 Installing skills, flows and MCP servers stays admin-only, as before.
@@ -122,7 +130,9 @@ workspaces and daily message limit apply, and chats are saved under them.
   admin-owned keys reach `/v1/admin/*`, `/v1/system/*`, `/v1/users*`, `/v1/embed*` and
   `/v1/mcp-servers*`. Any `/v1` route not explicitly opened to other roles is admin-only.
 - **Workspace scope:** optionally limit a key to some workspaces, within what its owner
-  can already reach.
+  can already reach. A limited key can't call admin-only routes or the routes that work
+  on the whole document library (`/v1/documents`, folders, moves, generated files), and
+  `addToWorkspaces` on an upload must name only its workspaces.
 - **Expiry:** optional; expired keys are refused.
 - **Legacy keys** (created before this change, with no owner) are refused in multi-user
   mode as soon as this version runs. Assign an owner on the API keys page to keep one
