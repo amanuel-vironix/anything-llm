@@ -34,6 +34,9 @@ const {
 
 function adminEndpoints(app) {
   if (!app) return;
+  // Access policies and teams register here so server/index.js stays untouched.
+  require("./accessPolicies").accessPolicyEndpoints(app);
+  require("./teams").teamEndpoints(app);
 
   app.get(
     "/admin/users",

@@ -8,6 +8,25 @@ const { User } = require("./user");
 const { PromptHistory } = require("./promptHistory");
 const { SystemSettings } = require("./systemSettings");
 
+/**
+ * The Prisma filter for "workspaces this non-admin user can open": direct membership,
+ * or the workspace belongs to the user's team. Team membership is read per call, so
+ * joining or leaving a team takes effect on the next request.
+ * @param {{id: number}} user
+ * @returns {Promise<object>}
+ */
+async function memberAccessFilter(user) {
+  const membership = user?.id
+    ? await prisma.team_members.findUnique({
+        where: { user_id: Number(user.id) },
+        select: { team_id: true },
+      })
+    : null;
+  const direct = { workspace_users: { some: { user_id: user?.id } } };
+  if (!membership) return direct;
+  return { OR: [direct, { team_id: membership.team_id }] };
+}
+
 function isNullOrNaN(value) {
   if (value === null) return true;
   return isNaN(value);
@@ -297,14 +316,7 @@ const Workspace = {
 
     try {
       const workspace = await prisma.workspaces.findFirst({
-        where: {
-          ...clause,
-          workspace_users: {
-            some: {
-              user_id: user?.id,
-            },
-          },
-        },
+        where: { AND: [clause, await memberAccessFilter(user)] },
         include: {
           workspace_users: true,
           documents: true,
@@ -423,14 +435,7 @@ const Workspace = {
 
     try {
       const workspaces = await prisma.workspaces.findMany({
-        where: {
-          ...clause,
-          workspace_users: {
-            some: {
-              user_id: user.id,
-            },
-          },
-        },
+        where: { AND: [clause, await memberAccessFilter(user)] },
         ...(limit !== null ? { take: limit } : {}),
         ...(orderBy !== null ? { orderBy } : {}),
       });
@@ -563,6 +568,36 @@ const Workspace = {
    * @param {import("../node_modules/.prisma/client/index.d.ts").Prisma.TypeMap['model']['workspaces']['operations']['findMany']['args']} prismaQuery
    * @returns
    */
+  /**
+   * Give a workspace to a team, or detach it (null). Admin only; `team_id` is not in
+   * `writable`, so the normal update routes can't change it.
+   * @param {number} workspaceId
+   * @param {number|null} teamId
+   * @returns {Promise<{workspace: object|null, error: string|null}>}
+   */
+  setTeam: async function (workspaceId, teamId = null) {
+    try {
+      if (teamId !== null) {
+        const team = await prisma.teams.findUnique({
+          where: { id: Number(teamId) },
+          select: { id: true },
+        });
+        if (!team)
+          return { workspace: null, error: "That team does not exist." };
+      }
+      const workspace = await prisma.workspaces.update({
+        where: { id: Number(workspaceId) },
+        data: { team_id: teamId === null ? null : Number(teamId) },
+      });
+      return { workspace, error: null };
+    } catch (error) {
+      if (error?.code === "P2025")
+        return { workspace: null, error: "Workspace not found." };
+      console.error(error.message);
+      return { workspace: null, error: error.message };
+    }
+  },
+
   _findMany: async function (prismaQuery = {}) {
     try {
       const results = await prisma.workspaces.findMany(prismaQuery);

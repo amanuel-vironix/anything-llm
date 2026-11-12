@@ -36,12 +36,14 @@ const SlashCommandPresets = {
     }
   },
 
-  // Command + userId must be unique combination.
-  create: async function (userId = null, presetData = {}) {
+  // Command + userId + team must be unique combination. `teamId` shares the preset with
+  // that team (0 = personal).
+  create: async function (userId = null, presetData = {}, { teamId = 0 } = {}) {
     try {
       const existingPreset = await this.get({
         userId: userId ? Number(userId) : null,
         command: String(presetData.command),
+        team_id: Number(teamId) || 0,
       });
 
       if (existingPreset) {
@@ -60,6 +62,7 @@ const SlashCommandPresets = {
           // to constrain against within the context of prisma and sqlite that works.
           uid: userId ? Number(userId) : 0,
           userId: userId ? Number(userId) : null,
+          team_id: Number(teamId) || 0,
         },
       });
       return preset;
@@ -69,23 +72,77 @@ const SlashCommandPresets = {
     }
   },
 
+  /**
+   * The presets a user can use: their own, plus those shared with their team. When two
+   * share a command, the user's personal one wins, then their own shared one.
+   * @param {number|null} userId
+   */
   getUserPresets: async function (userId = null) {
     try {
-      return (
-        await prisma.slash_command_presets.findMany({
-          where: { userId: !!userId ? Number(userId) : null },
-          orderBy: { createdAt: "asc" },
-        })
-      )?.map((preset) => ({
-        id: preset.id,
-        command: preset.command,
-        prompt: preset.prompt,
-        description: preset.description,
-      }));
+      const uid = userId ? Number(userId) : null;
+      const membership = uid
+        ? await prisma.team_members.findUnique({
+            where: { user_id: uid },
+            select: { team_id: true },
+          })
+        : null;
+      const rows = await prisma.slash_command_presets.findMany({
+        where: membership
+          ? { OR: [{ userId: uid }, { team_id: membership.team_id }] }
+          : { userId: uid },
+        orderBy: { createdAt: "asc" },
+      });
+      // Own rows count only when personal or shared with the current team.
+      const visible = rows.filter(
+        (p) =>
+          p.userId !== uid || !p.team_id || p.team_id === membership?.team_id
+      );
+      const rank = (p) => (p.userId === uid ? (p.team_id ? 1 : 0) : 2);
+      const byCommand = new Map();
+      for (const preset of visible) {
+        const current = byCommand.get(preset.command);
+        if (!current || rank(preset) < rank(current))
+          byCommand.set(preset.command, preset);
+      }
+      return visible
+        .filter((preset) => byCommand.get(preset.command) === preset)
+        .map((preset) => ({
+          id: preset.id,
+          command: preset.command,
+          prompt: preset.prompt,
+          description: preset.description,
+          teamId: preset.team_id || null,
+          shared: !!preset.team_id,
+          isOwner: preset.userId === uid,
+        }));
     } catch (error) {
       console.error("Failed to get user presets", error.message);
       return [];
     }
+  },
+
+  /**
+   * The preset if `user` may edit or delete it: its owner, an admin, or a lead of the
+   * team it is shared with. In single-user mode (no user) only unowned presets match.
+   * @returns {Promise<object|null>}
+   */
+  editableBy: async function (presetId, user = null) {
+    const preset = await this.get({ id: Number(presetId) });
+    if (!preset) return null;
+    if (!user) return preset.userId === null ? preset : null;
+    if (preset.userId === Number(user.id)) return preset;
+    if (user.role === "admin") return preset;
+    if (preset.team_id) {
+      const lead = await prisma.team_members.findFirst({
+        where: {
+          user_id: Number(user.id),
+          team_id: preset.team_id,
+          role: "lead",
+        },
+      });
+      if (lead) return preset;
+    }
+    return null;
   },
 
   update: async function (presetId = null, presetData = {}) {
