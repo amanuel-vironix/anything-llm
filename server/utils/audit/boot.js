@@ -16,6 +16,13 @@ async function auditBoot() {
     console.error(`[audit] outbox flush at boot failed: ${e.message}`);
   }
   try {
+    const { failed } = require("./vendors").instrument();
+    for (const f of failed)
+      console.error(`[audit] vendor inventory: ${f.provider}: ${f.error}`);
+  } catch (e) {
+    console.error(`[audit] vendor inventory failed: ${e.message}`);
+  }
+  try {
     const { SystemSettings } = require("../../models/systemSettings");
     await audit.record(
       {
@@ -37,8 +44,15 @@ async function auditBoot() {
   for (const signal of ["SIGTERM", "SIGINT"]) {
     process.prependOnceListener(signal, () => {
       const othersHandleIt = process.listenerCount(signal) > 0;
-      audit
-        .record({ action: "system.shutdown", metadata: { signal } }, { ctx })
+      require("./vendors")
+        .flush()
+        .catch(() => {})
+        .then(() =>
+          audit.record(
+            { action: "system.shutdown", metadata: { signal } },
+            { ctx }
+          )
+        )
         .catch(() => {})
         .finally(() => {
           if (!othersHandleIt) process.kill(process.pid, signal);

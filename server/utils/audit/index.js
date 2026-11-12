@@ -95,11 +95,15 @@ function buildRow(event, opts = {}) {
   if (!OUTCOMES.includes(outcome))
     throw new AuditError(`Unknown audit outcome: ${outcome}`);
 
+  // Without the middleware (a test harness, a router mounted elsewhere), the
+  // response's locals still name the authenticated actor.
   const ctx =
     opts.ctx ||
     opts.response?.locals?.audit ||
     context.currentContext() ||
-    null;
+    (opts.response?.locals
+      ? context.newContext({ channel: "unknown", locals: opts.response.locals })
+      : null);
   let actor = context.resolveActor(ctx);
   if (event.actor) {
     if (!ACTOR_TYPES.includes(event.actor.type))
