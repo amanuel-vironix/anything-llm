@@ -584,48 +584,53 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 | SE-AUTH-02 | P-AUTH-01 | TEL | `onboarding_complete` | `server/models/systemSettings.js:820` | no | |
 | SE-AUTH-03 | P-AUTH-02 | ENV | `AUTH_TOKEN`, `JWT_SECRET` | `server/endpoints/system.js:648-654` | yes (set again) | invalidates all single-user sessions |
 | SE-AUTH-04 | P-AUTH-03 | ENV | `AUTH_TOKEN=""`, `JWT_SECRET=""`; `.env` dumped only in production | `server/endpoints/system.js:634-636` | yes | |
-| SE-AUTH-05 | P-AUTH-04 | LOG | `failed_login_invalid_password` | `server/endpoints/system.js:328` | admin can clear logs | |
+| SE-AUTH-05 | P-AUTH-04 | LOG | `audit_events: auth.login_failed` (still called as legacy `failed_login_invalid_password`, mapped by `server/utils/audit/legacy.js`) | `server/endpoints/system.js:331` | rows are append-only; `DELETE /system/event-logs` records `audit.cleared` | |
 | SE-AUTH-06 | P-AUTH-04 | TEL | `login_event {multiUserMode:false}` | `server/endpoints/system.js:340` | no | |
-| SE-AUTH-07 | P-AUTH-04 | LOG | `login_event` | `server/endpoints/system.js:341` | | |
+| SE-AUTH-07 | P-AUTH-04 | LOG | `audit_events: auth.login_succeeded` (legacy `login_event`) | `server/endpoints/system.js:344` | | |
 | SE-AUTH-08 | P-AUTH-05 | DB | `users` (admin row) | `server/endpoints/system.js:679` | rollback deletes all users | |
 | SE-AUTH-09 | P-AUTH-05 | DB | `system_settings.multi_user_mode=true` | `server/endpoints/system.js:693` | **no** (one-way) | |
 | SE-AUTH-10 | P-AUTH-05 | DB | `browser_extension_api_keys`, `memories`, `workspace_chats`, `workspace_threads`, `workspace_parsed_files`, `desktop_mobile_devices`, `slash_command_presets` owner NULL → admin; single-user whitelist setting deleted | `server/endpoints/system.js:696-703` | no | the rollback cascade-deletes several of these |
 | SE-AUTH-11 | P-AUTH-05 | ENV | `JWT_SECRET` (if unset) | `server/endpoints/system.js:704` | | |
-| SE-AUTH-12 | P-AUTH-05 | TEL + LOG | `enabled_multi_user_mode`, `multi_user_mode_enabled` | `server/endpoints/system.js:710-713` | | |
-| SE-AUTH-13 | P-AUTH-06 | LOG | `failed_login_invalid_username` / `_invalid_password` / `_account_suspended` | `server/endpoints/system.js:227,245,263` | | stores the attempted username and IP |
+| SE-AUTH-12 | P-AUTH-05 | TEL + LOG | `enabled_multi_user_mode`; `audit_events: multi_user.enabled` (legacy `multi_user_mode_enabled`) | `server/endpoints/system.js:850-854` | | |
+| SE-AUTH-13 | P-AUTH-06 | LOG | `audit_events: auth.login_failed` (legacy `failed_login_invalid_username` / `_invalid_password` / `_account_suspended`) | `server/endpoints/system.js:230,248,266` | | the attempted username and IP are still recorded (see `legacy.js` for the stored fields) |
 | SE-AUTH-14 | P-AUTH-06 | TEL | `login_event` (wrong `multiUserMode:false`) | `server/endpoints/system.js:280` | | |
-| SE-AUTH-15 | P-AUTH-06 | LOG | `login_event` | `server/endpoints/system.js:286` | | |
+| SE-AUTH-15 | P-AUTH-06 | LOG | `audit_events: auth.login_succeeded` (legacy `login_event`) | `server/endpoints/system.js:289` | | |
 | SE-AUTH-16 | P-AUTH-06 | DB | `recovery_codes` ×4, `users.seen_recovery_codes` | `server/utils/PasswordRecovery/index.js:23-28` | via reset | |
 | SE-AUTH-17 | P-AUTH-07 | CACHE | `UserMetaCache` | `server/utils/middleware/validatedRequest.js:21,70,109` | | contents unverified |
 | SE-AUTH-18 | P-AUTH-10 | DB | `temporary_auth_tokens` delete + create | `server/models/temporaryAuthToken.js:27,32` | | |
 | SE-AUTH-19 | P-AUTH-11 | DB | `temporary_auth_tokens` delete | `server/models/temporaryAuthToken.js:98-99` | | |
-| SE-AUTH-20 | P-AUTH-11 | LOG | `failed_login_invalid_temporary_auth_token` / `login_event` | `server/endpoints/system.js:369,385` | | |
+| SE-AUTH-20 | P-AUTH-11 | LOG | `audit_events: auth.login_failed` / `auth.login_succeeded` (legacy `failed_login_invalid_temporary_auth_token` / `login_event`) | `server/endpoints/system.js:372,388` | | |
 | SE-AUTH-21 | P-AUTH-11 | TEL | `login_event {multiUserMode:true}` | `server/endpoints/system.js:380` | | |
 | SE-AUTH-22 | P-AUTH-12 | DB | `invites` create | `server/models/invite.js:12` | disable | |
-| SE-AUTH-23 | P-AUTH-12 | LOG | `invite_created` with the plaintext code | `server/endpoints/admin.js:192` | | code exposed to log readers |
+| SE-AUTH-23 | P-AUTH-12 | LOG | `audit_events: invite.created` (legacy `invite_created`); metadata holds `codeHash` (sha256 of the code), not the code (F-55, a860f55a) | `server/endpoints/admin.js:192` | | |
 | SE-AUTH-24 | P-AUTH-13 | DB | `users`, `invites`, `workspace_users` | `server/endpoints/invite.js:65,76`; `server/models/invite.js:46,61` | delete user | |
-| SE-AUTH-25 | P-AUTH-13 | LOG | `invite_accepted` | `server/endpoints/invite.js:77` | | |
+| SE-AUTH-25 | P-AUTH-13 | LOG | `audit_events: invite.claimed` (legacy `invite_accepted`) | `server/endpoints/invite.js:77` | | |
 | SE-AUTH-26 | P-AUTH-14 | DB | `invites.status=disabled` | `server/models/invite.js:33` | no | |
-| SE-AUTH-27 | P-AUTH-14 | LOG | `invite_deleted` | `server/endpoints/admin.js:215` | | logged even if not found |
+| SE-AUTH-27 | P-AUTH-14 | LOG | `audit_events: invite.disabled` (legacy `invite_deleted`) | `server/endpoints/admin.js:215` | | logged even if not found |
 | SE-AUTH-28 | P-AUTH-15 | DB | `users` create | `server/models/user.js:126` | delete | |
-| SE-AUTH-29 | P-AUTH-15 | LOG | `user_created` | `server/endpoints/admin.js:70` | | |
+| SE-AUTH-29 | P-AUTH-15 | LOG | `audit_events: user.created` (legacy `user_created`) | `server/endpoints/admin.js:70` | | |
 | SE-AUTH-30 | P-AUTH-16 | DB | `users.*` | `server/models/user.js:201` | yes | |
-| SE-AUTH-31 | P-AUTH-16/19/20/22 | LOG | `user_updated` (userId = target, not actor) | `server/models/user.js:206` | | |
+| SE-AUTH-31 | P-AUTH-16/19/20/22 | LOG | `audit_events: user.updated` (+ `user.role_changed`, `user.suspended` / `user.unsuspended` when those fields change); legacy `user_updated`. The actor is the acting admin from the request context; the updated user is the target (F-55, a860f55a). Free-text fields are named, not stored | `server/models/user.js:206`; mapping `server/utils/audit/legacy.js` | | |
 | SE-AUTH-32 | P-AUTH-17 | DB | `browser_extension_api_keys` delete; `workspace_chats` detach; `users` delete + cascades | `server/endpoints/admin.js:144-145`; `server/models/user.js:313-319` | **no** | |
-| SE-AUTH-33 | P-AUTH-17 | LOG | `user_deleted` | `server/endpoints/admin.js:146` | | |
+| SE-AUTH-33 | P-AUTH-17 | LOG | `audit_events: user.deleted` (legacy `user_deleted`) | `server/endpoints/admin.js:146` | | |
 | SE-AUTH-34 | P-AUTH-18 | DB | `users`, `invites` | `server/endpoints/api/admin/index.js:135,207,258,364,424` | | |
-| SE-AUTH-35 | P-AUTH-18 | LOG | `api_user_deleted` (no actor) | `server/endpoints/api/admin/index.js:259` | | create/update not logged |
+| SE-AUTH-35 | P-AUTH-18 | LOG | `audit_events: user.deleted` (legacy `api_user_deleted`); the actor is the API key from the request context | `server/endpoints/api/admin/index.js:259` | | API create/update still not logged except through `User.update` (`user_updated`); the file belongs to the Google sign-in branch (F-55) |
 | SE-AUTH-36 | P-AUTH-19 | DB | `users.username/password/bio` | `server/endpoints/system.js:1291` | | |
 | SE-AUTH-37 | P-AUTH-20 | FS | `STORAGE_DIR/assets/pfp/<uuid>` written; old file unlinked (wrong dir outside development) | `server/utils/files/multer.js:68-84`; `server/endpoints/system.js:857-864,944-951` | | orphans files |
 | SE-AUTH-38 | P-AUTH-20 | DB | `users.pfpFilename` | `server/endpoints/system.js:867,954` | | |
 | SE-AUTH-39 | P-AUTH-21 | DB | `password_reset_tokens` create | `server/models/passwordRecovery.js:81` | expires | no LOG |
 | SE-AUTH-40 | P-AUTH-22 | DB | `users.password`, `users.seen_recovery_codes`; delete `password_reset_tokens`, `recovery_codes` | `server/utils/PasswordRecovery/index.js:87-99` | no | |
 | SE-AUTH-41 | P-AUTH-23/24 | DB | `api_keys` create/delete | `server/models/apiKeys.js:16,53` | | plaintext secret |
-| SE-AUTH-42 | P-AUTH-23/24 | LOG | `api_key_created` / `api_key_deleted` | `server/endpoints/system.js:1075,1107`; `server/endpoints/admin.js:531,556` | | |
-| SE-AUTH-43 | P-AUTH-26/27 | DB | `browser_extension_api_keys` create/delete | `server/models/browserExtensionApiKey.js:22,79` | | no LOG |
+| SE-AUTH-42 | P-AUTH-23/24 | LOG | `audit_events: api_key.created` / `api_key.deleted` (legacy `api_key_created` / `api_key_deleted`) | `server/endpoints/admin.js:531,556`; the `/system/generate-api-key` and `/system/api-key/:id` routes are held for the access-policy branch (`server/utils/audit/routes/held.js`) | | |
+| SE-AUTH-43 | P-AUTH-26/27 | DB | `browser_extension_api_keys` create/delete | `server/models/browserExtensionApiKey.js:22,79` | | LOG: see SE-AUTH-51 |
 | SE-AUTH-44 | P-AUTH-28 | CACHE | `TemporaryMobileDeviceRequests` Map set/delete/sweep | `server/models/mobileDevice.js:48,72,84-89` | | in-memory |
 | SE-AUTH-45 | P-AUTH-28 | DB | `desktop_mobile_devices` create | `server/models/mobileDevice.js:125` | delete | no LOG |
 | SE-AUTH-46 | P-AUTH-29 | DB | `desktop_mobile_devices.approved` / delete | `server/models/mobileDevice.js:160,192` | | no LOG |
+| SE-AUTH-47 | P-AUTH-02/03 | LOG | `audit_events: auth.password_changed` (outcome `success` / `failed` / `denied`; denied in multi-user mode; `password_disabled` noted in `reason`) | `server/endpoints/system.js:732,759,785` | | recorded with `recordOrFail`: the request ends 500 if the row can't be stored or queued |
+| SE-AUTH-48 | P-AUTH-21 | LOG | `audit_events: auth.recovery_used` (no username or codes stored) | `server/endpoints/system.js:425` | | |
+| SE-AUTH-49 | P-AUTH-22 | LOG | `audit_events: auth.password_reset` (success, failed) | `server/endpoints/system.js:483,498` | | |
+| SE-AUTH-50 | P-AUTH-19 | LOG | `audit_events: user.updated` (field names only) + `auth.password_changed` on `POST /system/user` | `server/endpoints/system.js:1516,1531` | | |
+| SE-AUTH-51 | P-AUTH-20, P-AUTH-26/27 | LOG | `audit_events: user.updated` (`changedFields: ["pfpFilename"]`) for upload and remove of the profile picture; `extension_key.created` / `extension_key.deleted` for browser extension keys | `server/endpoints/system.js:1015,1118`; `server/endpoints/browserExtension.js:240,282` | | |
 
 ---
 

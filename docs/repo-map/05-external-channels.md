@@ -787,20 +787,20 @@ reset (`embedChats.js:90-102`) → deleted by admin (`embedManagement.js:123`) o
 
 | ID | Trigger | Class | Target | Where (path:line) | Reversible? | Notes |
 |---|---|---|---|---|---|---|
-| SE-EXT-01 | P-EXT-03 | DB | users (create/update/delete) | `api/admin/index.js:135`, `:207`, `:258` | Delete: no | No LOG on create/update |
-| SE-EXT-02 | P-EXT-03 | LOG | event_logs `api_user_deleted` | `api/admin/index.js:259` | n/a | userId null |
+| SE-EXT-01 | P-EXT-03 | DB | users (create/update/delete) | `api/admin/index.js:135`, `:207`, `:258` | Delete: no | Create not recorded; the route is held for the Google sign-in branch (F-55) |
+| SE-EXT-02 | P-EXT-03 | LOG | `audit_events: user.deleted` (legacy `api_user_deleted`); actor is the API key from the request context | `api/admin/index.js:259` | n/a | `user.updated` via `User.update` is recorded (see SE-AUTH-31) |
 | SE-EXT-03 | P-EXT-04 | DB | invites | `api/admin/index.js:364`, `:424` | Yes (soft) | |
 | SE-EXT-04 | P-EXT-05 | DB | workspace_users | `api/admin/index.js:551`, `:648`, `:665` | Yes | No LOG |
 | SE-EXT-05 | P-EXT-06 | DB | system_settings | `api/admin/index.js:781` | Yes | |
 | SE-EXT-06 | P-EXT-07 | ENV | process.env + `.env` | `api/system/index.js:148`; `updateENV.js:1573` | Yes | No user, admin gate absent |
 | SE-EXT-07 | P-EXT-07 | ENV | `.env` dump | `api/system/index.js:31` | n/a | Unauthenticated |
-| SE-EXT-08 | P-EXT-07 | LOG | provider change events | `updateENV.js:1585-1596` | n/a | userId null |
-| SE-EXT-09 | P-EXT-08 | LOG | `exported_chats` | `api/system/index.js:208` | n/a | |
-| SE-EXT-10 | P-EXT-08 | FS/DB/VEC | documents purge | `api/system/index.js:274` | No | Sequential, partial on error |
+| SE-EXT-08 | P-EXT-07 | LOG | `audit_events: settings.changed` per changed key (secrets masked) and `vendor.changed` for LLM, embedder, vector DB, TTS/STT and similar settings; a failed key records `settings.changed` with outcome `failed` | `server/utils/helpers/updateENV.js:1628,1641,1654` | n/a | the old `update_llm_provider` / `update_embedding_engine` / `update_vector_db` events are gone; actor is the API key |
+| SE-EXT-09 | P-EXT-08 | LOG | `audit_events: chat.exported` | `server/endpoints/api/system/index.js:211` | n/a | |
+| SE-EXT-10 | P-EXT-08 | FS/DB/VEC | documents purge; `audit_events: document.deleted` at `api/system/index.js:286` | `api/system/index.js:274` | No | Sequential, partial on error |
 | SE-EXT-11 | P-EXT-09 | DB | temporary auth token | `api/userManagement/index.js:109` | Expires | No LOG |
 | SE-EXT-12 | P-EXT-10 | DB | workspaces create/update | `api/workspace/index.js:80`, `:345` | Yes | |
 | SE-EXT-13 | P-EXT-10 | DB/VEC | workspace delete cascade | `api/workspace/index.js:258-267` | No | Not transactional |
-| SE-EXT-14 | P-EXT-10 | TEL/LOG | `workspace_created`, `api_workspace_*` | `api/workspace/index.js:91`, `:99`, `:263` | n/a | |
+| SE-EXT-14 | P-EXT-10 | TEL/LOG | `workspace_created` telemetry; `audit_events: workspace.created` / `workspace.deleted` (legacy `api_workspace_created` / `api_workspace_deleted`) | `api/workspace/index.js:91`, `:99`, `:263` | n/a | |
 | SE-EXT-15 | P-EXT-11 | DB/VEC/NET:embedder | workspace_documents | `api/workspace/index.js:521-522` | Yes | Errors not surfaced |
 | SE-EXT-16 | P-EXT-11 | DB | workspace_documents.pinned | `api/workspace/index.js:591` | Yes | |
 | SE-EXT-17 | P-EXT-12/13/16/38 | DB | workspace_chats insert | `apiChatHandler.js:230`, `:283`, `:410`, `:477`, `:884` | Soft (reset) | user per channel |
@@ -809,41 +809,48 @@ reset (`embedChats.js:90-102`) → deleted by admin (`embedManagement.js:123`) o
 | SE-EXT-20 | P-EXT-12/13 | NET:collector | parse attachment | `apiChatHandler.js:91` | n/a | |
 | SE-EXT-21 | P-EXT-12/13/16/24/27/33/38 | NET:llm-provider | completion | `apiChatHandler.js:456`, `:872`; `openaiCompatible.js` ; `embed.js` | n/a | Cost metered by `addChatCostToMetrics` |
 | SE-EXT-22 | P-EXT-13/16/24/27/38 | WS | SSE stream to caller | `api/workspace/index.js:855-859`; `embed/index.js:36-40`; `mobile/utils/index.js:175-179` | n/a | `Access-Control-Allow-Origin: *` |
-| SE-EXT-23 | P-EXT-12/13/16/24 | TEL/LOG | `sent_chat`, `api_sent_chat` | `api/workspace/index.js:711`, `:718`; `api/openai/index.js:147`, `:154` | n/a | Not sent by mobile |
+| SE-EXT-23 | P-EXT-12/13/16/24 | TEL/LOG | `sent_chat` telemetry; `audit_events: chat.sent` (legacy `api_sent_chat`) | `api/workspace/index.js:718`, `:879`; `api/workspaceThread/index.js:471`, `:675`; `api/openai/index.js:154`, `:183` | n/a | Not recorded for mobile (route pending the access-policy branch) |
 | SE-EXT-24 | P-EXT-15 | DB | workspace_threads | `api/workspaceThread/index.js:87`, `:184`, `:233` | Delete: no | userId unvalidated |
 | SE-EXT-25 | P-EXT-16/38 | DB | thread auto-rename | `api/workspaceThread/index.js:458`; `mobile/utils/index.js:192` | Yes | |
 | SE-EXT-26 | P-EXT-17/18 | FS | hotdir upload, storage/documents | `multer.js:31-37`; `api/document/index.js:144`, `:308` | Yes (delete doc) | |
 | SE-EXT-27 | P-EXT-17/18/42 | NET:collector | process document/link/text | `api/document/index.js:144`, `:453`, `:634`; `browserExtension.js:98` | n/a | Link fetch is outbound to any URL |
 | SE-EXT-28 | P-EXT-17/18 | DB/VEC | addToWorkspaces | `api/document/index.js:166`, `:481`, `:652` | Yes | Partial success possible |
-| SE-EXT-29 | P-EXT-17/18 | TEL/LOG | `document_uploaded`, `api_*_uploaded` | `api/document/index.js:160-163`, `:474-475`, `:648-649` | n/a | |
+| SE-EXT-29 | P-EXT-17/18 | TEL/LOG | telemetry; `audit_events: document.uploaded` and `document.embedded` | `api/document/index.js:191`, `:212`, `:360`, `:381`, `:538`, `:559`, `:730`, `:747` | n/a | |
 | SE-EXT-30 | P-EXT-19 | TEL | `agent_generated_file_downloaded` | `api/document/index.js:1300`, `:1328` | n/a | |
 | SE-EXT-31 | P-EXT-20 | FS | folder mkdir / purge / rename | `api/document/index.js:1036`, `:1093`, `:1179` | Partly | Batch move not atomic |
-| SE-EXT-32 | P-EXT-21 | DB | embed_configs (+cascade embed_chats) | `api/embed/index.js:275`, `:349`, `:397` | Delete: no | No LOG |
+| SE-EXT-32 | P-EXT-21 | DB + LOG | embed_configs (+cascade embed_chats); `audit_events: embed.created` / `embed.updated` / `embed.deleted` (F-55, dcc0e052) | `api/embed/index.js:275`, `:349`, `:397`; audit at `:309`, `:396`, `:462` | Delete: no | |
 | SE-EXT-33 | P-EXT-22 | FS/PROC | MCP config file, spawn server | `server/utils/MCP/index.js:320-348`; `hypervisor/index.js:528` | Yes | Arbitrary command |
 | SE-EXT-34 | P-EXT-25 | NET:embedder | embed chunks | `api/openai/index.js:335` | n/a | |
 | SE-EXT-35 | P-EXT-26 | NET:image-provider + FS | generate/edit image, save | `ImageGenerators/index.js:14-16` | Yes | |
 | SE-EXT-36 | P-EXT-27 | DB | embed_chats insert (Origin, IP, username) | `embed.js:232-243` | Soft | Only if non-empty |
 | SE-EXT-37 | P-EXT-27 | TEL | `embed_sent_chat` | `embed/index.js:48` | n/a | |
 | SE-EXT-38 | P-EXT-28 | DB | embed_chats.include → false | `embedChats.js:94-101` | No | |
-| SE-EXT-39 | P-EXT-29 | DB/LOG | embed config CRUD + `embed_*` | `embedManagement.js:41-46`, `:63-64`, `:79-84`, `:123` | Delete: no | |
+| SE-EXT-39 | P-EXT-29 | DB/LOG | embed config CRUD; `audit_events: embed.created` / `embed.updated` / `embed.deleted` | `embedManagement.js:54`, `:85`, `:120` | Delete: no | |
 | SE-EXT-40 | P-EXT-30 | DB | connector upsert/delete (encrypted token) | `telegram.js:132-139`, `:168` | Yes | |
 | SE-EXT-41 | P-EXT-30 | NET:telegram + TIME | verify, long polling, retry timer | `telegram.js:89`; `telegramBot/index.js:111-113`, `:281` | Stop | |
-| SE-EXT-42 | P-EXT-30 | LOG/TEL | `telegram_bot_connected/disconnected` | `telegram.js:146-149`, `:169` | n/a | |
+| SE-EXT-42 | P-EXT-30 | LOG/TEL | `audit_events: telegram.bot_connected` / `telegram.bot_disconnected` (+ `settings.changed` on update-config at `:362`) | `server/endpoints/telegram.js:148`, `:175` | n/a | |
 | SE-EXT-43 | P-EXT-31 | PUSH | pairing code / approved / denied messages | `verification.js:91`, `:121`, `:142` | n/a | |
 | SE-EXT-44 | P-EXT-31/32/34 | DB | `approved_users` and per-chat state JSON | `verification.js:113`, `:159`; `telegramBot/index.js:381` | Yes | |
-| SE-EXT-45 | P-EXT-31/32 | LOG | `telegram_user_approved/denied/revoked` | `telegram.js:240`, `:262`, `:284` | n/a | |
+| SE-EXT-45 | P-EXT-31/32 | LOG | `audit_events: telegram.user_approved` / `telegram.user_denied` / `telegram.user_revoked` | `server/endpoints/telegram.js:250`, `:280`, `:310` | n/a | |
 | SE-EXT-46 | P-EXT-33 | PROC | Bree worker `handle-telegram-chat` | `telegramBot/index.js:495-507` | n/a | Plaintext token over IPC |
 | SE-EXT-47 | P-EXT-33 | DB | workspace_chats insert (no user) | `telegramBot/chat/stream.js:329-340` | Soft | |
 | SE-EXT-48 | P-EXT-33 | PUSH/NET:telegram | bot reply, voice reply | `telegramBot/chat/stream.js` (stream handler), `:342-345` | n/a | |
 | SE-EXT-49 | P-EXT-34 | DB | Workspace.new / chatModel / thread / reset | `handleWorkspaceCreate.js:13`; `handleModelSelect.js:42`; `handleNewThread.js:17`; `handleReset.js:19` | Yes | Model change is global |
 | SE-EXT-50 | P-EXT-35 | DB | connector delete in multi-user | `telegramBot/index.js:427` | No | |
 | SE-EXT-51 | P-EXT-36 | CACHE | temp pairing token map | `mobileDevice.js:72`, `:48` | Expires 3 min | |
-| SE-EXT-52 | P-EXT-36/39 | DB | desktop_mobile_devices create/approve/delete | `mobile/index.js:127`, `:46`, `:75`; `mobile/utils/index.js:213` | Yes | No LOG |
+| SE-EXT-52 | P-EXT-36/39 | DB | desktop_mobile_devices create/approve/delete | `mobile/index.js:127`, `:46`, `:75`; `mobile/utils/index.js:213` | Yes | No LOG (mobile routes pending the access-policy branch) |
 | SE-EXT-53 | P-EXT-37 | DB | reset-chat / new-thread | `mobile/utils/index.js:129`, `:145` | Soft | |
-| SE-EXT-54 | P-EXT-40/41 | DB | browser_extension_api_keys | `browserExtension.js:181`, `:213`, `:51` | Delete: no | |
-| SE-EXT-55 | P-EXT-42 | DB/VEC/FS | add document to workspace | `browserExtension.js:98-112` | Yes | No LOG |
+| SE-EXT-54 | P-EXT-40/41 | DB + LOG | browser_extension_api_keys; `audit_events: extension_key.created` / `extension_key.deleted` | `browserExtension.js:181`, `:213`, `:51`; audit at `:240`, `:282`, `:57` | Delete: no | |
+| SE-EXT-55 | P-EXT-42 | DB/VEC/FS | add document to workspace; `audit_events: document.uploaded` / `document.embedded` | `browserExtension.js:98-112`; audit at `:135`, `:149`, `:190` | Yes | |
 | SE-EXT-56 | P-EXT-42 | TEL | `browser_extension_*` | `browserExtension.js:119`, `:145` | n/a | |
 | SE-EXT-57 | P-EXT-43 | DB/FS/CACHE | push subscription | `PushNotifications/index.js:148-163` | Overwrite | One per user |
+| SE-EXT-58 | P-EXT-22 | LOG | `audit_events: mcp.server_added` / `mcp.server_updated` / `mcp.server_started` / `mcp.server_stopped` / `mcp.tool_toggled` / `mcp.server_removed` (actor is the API key) | `server/endpoints/api/mcpServers/index.js:106,222,283,369,424` | n/a | no row before |
+| SE-EXT-59 | P-EXT-21, P-EXT-28 | LOG | `audit_events: chat.viewed_other_user` for embed chat reads (developer API and admin UI), `embed.chats_deleted` | `server/endpoints/api/embed/index.js:136,209`; `server/endpoints/embedManagement.js:159,190` | n/a | no row before |
+| SE-EXT-60 | P-EXT-27 | LOG | `audit_events: embed.chat` per widget chat; `embed.rejected` when the embed middleware refuses; `embed.chats_deleted` for a session delete | `server/endpoints/embed/index.js:48,125`; `server/utils/middleware/embedMiddleware.js:19` | n/a | no row before |
+| SE-EXT-61 | P-EXT-08 (developer API) | LOG | `audit_events: document.viewed`, `document.deleted`, `document.downloaded` | `server/endpoints/api/document/index.js:1061,1198,1414,1450` | n/a | no row before |
+| SE-EXT-62 | Community Hub routes | LOG | `audit_events: community_hub.connected`, `community_hub.published`, `skill.installed`, `settings.changed` | `server/endpoints/communityHub.js:44,50,129,178,237` | n/a | no row before |
+| SE-EXT-63 | Outlook OAuth | LOG | `audit_events: oauth.connected` / `oauth.disconnected` | `server/endpoints/utils/outlookAgentUtils.js:87,136,216` | n/a | no row before |
+| SE-EXT-64 | `POST /export-chat/:type` | LOG | `audit_events: chat.exported` | `server/endpoints/utils.js:86` | n/a | no row before |
 
 ## 7. Cross-domain links
 

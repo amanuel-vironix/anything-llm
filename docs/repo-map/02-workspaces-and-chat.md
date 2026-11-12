@@ -696,14 +696,14 @@ Hidden rows never become visible again through any CHAT endpoint.
 |---|---|---|---|---|---|---|
 | SE-CHAT-01 | P-CHAT-02 | DB | `workspaces`, `workspace_users` | `workspace.js:221-233` | yes (delete) | |
 | SE-CHAT-02 | P-CHAT-02 | TEL | `workspace_created` | `workspaces.js:62` | no | fires even on failure |
-| SE-CHAT-03 | P-CHAT-02 | LOG | `event_logs` `workspace_created` | `workspaces.js:75` | no | |
+| SE-CHAT-03 | P-CHAT-02 | LOG | `audit_events: workspace.created` | `server/endpoints/workspaces.js:77` | no | |
 | SE-CHAT-04 | P-CHAT-03 | DB | `workspaces` | `workspace.js:283` | manually | |
 | SE-CHAT-05 | P-CHAT-03 | DB | `prompt_history` | `promptHistory.js:115` | yes (P-CHAT-07) | stores previous prompt |
-| SE-CHAT-06 | P-CHAT-03 | TEL + LOG | `workspace_prompt_changed` (log includes full prompts) | `workspace.js:547-555` | no | |
+| SE-CHAT-06 | P-CHAT-03 | TEL + LOG | `workspace_prompt_changed` telemetry; `audit_events: workspace.updated` (legacy `workspace_prompt_changed`, metadata `changedFields: ["openAiPrompt"]`; the prompt text is no longer stored) | `server/models/workspace.js:548-555`; `server/utils/audit/legacy.js` | no | the route also records `workspace.updated` at `server/endpoints/workspaces.js:123` (field names only) |
 | SE-CHAT-07 | P-CHAT-04 | DB | `workspace_chats` hard delete | `workspaces.js:320` | no | lowers quota counts |
 | SE-CHAT-08 | P-CHAT-04 | DB | `document_vectors`, `workspace_documents`, `workspaces` + cascades | `workspaces.js:321-323` | no | no transaction |
 | SE-CHAT-09 | P-CHAT-04 | VEC | namespace `slug` dropped | `workspaces.js:334` | no | errors swallowed |
-| SE-CHAT-10 | P-CHAT-04 | LOG | `workspace_deleted` | `workspaces.js:325` | no | |
+| SE-CHAT-10 | P-CHAT-04 | LOG | `audit_events: workspace.deleted` | `server/endpoints/workspaces.js:370` | no | |
 | SE-CHAT-11 | P-CHAT-05 | DB | `workspace_users` delete + create | `workspace.js:500-501` | manually | no transaction |
 | SE-CHAT-12 | P-CHAT-06 | DB | `workspace_suggested_messages` replace | `workspacesSuggestedMessages.js:38-53` | no | errors swallowed |
 | SE-CHAT-13 | P-CHAT-07 | DB | `prompt_history` delete | `workspace.js:636-659` | no | |
@@ -717,7 +717,7 @@ Hidden rows never become visible again through any CHAT endpoint.
 | SE-CHAT-21 | P-CHAT-10 S9 | NET:local | native reranker for memories when over the limit | `memories/index.js:68-95` | n/a | local model (unverified whether it downloads) |
 | SE-CHAT-22 | P-CHAT-10 S10 | NET:llm-provider | chat completion / stream | `stream.js:321`, `342` | no | aborted on client close |
 | SE-CHAT-23 | P-CHAT-10 S11 | DB | `workspace_chats` upsert | `stream.js:373-375` | hide only | |
-| SE-CHAT-24 | P-CHAT-10 S12 | TEL + LOG | `sent_chat` | `chat.js:76-93`, `186-204` | no | log includes workspace and thread names |
+| SE-CHAT-24 | P-CHAT-10 S12 | TEL + LOG | `sent_chat` telemetry; `audit_events: chat.sent` (`recordChatSent`: workspace slug, thread id, provider, model, message length, attachment count, mode; never the message or answer) | `server/endpoints/chat.js:33,117,220` | no | replaces the log row that held workspace and thread names |
 | SE-CHAT-25 | P-CHAT-11 | DB + WS | `workspace_threads.name`, `rename_thread` chunk | `workspaceThread.js:166-170`, `chat.js:175-183` | yes | |
 | SE-CHAT-26 | P-CHAT-12 | DB | `workspace_chats.include=false` | `commands/reset.js:11-17` | no | |
 | SE-CHAT-27 | P-CHAT-12 | CACHE | router sticky / LLM / notify entries | `router/index.js:191-207` | n/a | skipped for env-only router |
@@ -730,17 +730,23 @@ Hidden rows never become visible again through any CHAT endpoint.
 | SE-CHAT-34 | P-CHAT-18 | DB | `workspace_chats.prompt/response`, or `include=false` tail | `workspaces.js:529-576`, `workspaceThreads.js:211-262` | no | no edit history |
 | SE-CHAT-35 | P-CHAT-19 | DB | `workspace_chats.feedbackScore` | `workspaceChats.js:271` | yes | |
 | SE-CHAT-36 | P-CHAT-20 | DB | `workspace_chats.include=false` | `workspaces.js:824` | no | |
-| SE-CHAT-37 | P-CHAT-21 | DB + TEL + LOG | `workspace_threads`; `workspace_thread_created` | `workspaceThreads.js:34-57` | yes | |
+| SE-CHAT-37 | P-CHAT-21 | DB + TEL + LOG | `workspace_threads`; `workspace_thread_created` telemetry; `audit_events: thread.created` | `server/endpoints/workspaceThreads.js:34-57` (audit at `:53`) | yes | |
 | SE-CHAT-38 | P-CHAT-22 | DB | `workspace_threads.name` | `workspaceThread.js:68` | yes | |
 | SE-CHAT-39 | P-CHAT-23 | DB | chats hidden; threads + parsed-file rows deleted | `workspaceThread.js:101-107` | no | parsed-file files on disk untouched (unverified) |
-| SE-CHAT-40 | P-CHAT-24 | DB + LOG | thread + copied chats; `thread_forked` | `workspaces.js:766-799` | partly | uses up quota |
+| SE-CHAT-40 | P-CHAT-24 | DB + LOG | thread + copied chats; `audit_events: thread.forked` | `server/endpoints/workspaces.js:766-799`; audit at `:929` | partly | uses up quota |
 | SE-CHAT-41 | P-CHAT-26 | DB | `workspace_chats` hard delete (one or all) | `system.js:1224-1226` | no | not gated by `chatHistoryViewable` |
-| SE-CHAT-42 | P-CHAT-26 | LOG | `exported_chats` | `system.js:1246` | no | |
+| SE-CHAT-42 | P-CHAT-26 | LOG | `audit_events: chat.exported` (legacy `exported_chats` is no longer called here) | `server/endpoints/system.js:1465` | no | |
 | SE-CHAT-43 | P-CHAT-27 | NET:tts-provider | `ttsBuffer` | `workspaces.js:714-715` | n/a | |
 | SE-CHAT-44 | P-CHAT-27 | CACHE | TTS `responseCache` | `workspaces.js:719` | n/a | unbounded, never invalidated |
 | SE-CHAT-45 | P-CHAT-28 | DB | `model_routers`, `model_router_rules` | `modelRouter.js:51`, `212`, `236`; `modelRouterRule.js:77`, `194`, `213`, `229` | yes | |
 | SE-CHAT-46 | P-CHAT-28 | CACHE | `invalidateRouter(:id)` | `router/index.js:112-121` | n/a | wrong router if `:ruleId` is not under `:id` |
 | SE-CHAT-47 | P-CHAT-28 | TEL | `model_router_created`, `model_router_rule_created` | `modelRouter.js:65`, `128` | no | |
+| SE-CHAT-48 | P-CHAT-03/06/07 | LOG | `audit_events: workspace.updated` (field names only) for update, suggested messages, prompt-history clear and delete | `server/endpoints/workspaces.js:123,756,1155,1192` | no | no row before |
+| SE-CHAT-49 | P-CHAT-17/18/19/20 | LOG | `audit_events: chat.hidden` (delete-chats, delete-edited-chats, hide one chat, fork cleanup), `chat.edited`, `chat.feedback`; thread routes record the same at `workspaceThreads.js:134,189,307` (`chat.hidden`) and `:355` (`chat.edited`) | `server/endpoints/workspaces.js:563,609,649,704,969` | no | no row before |
+| SE-CHAT-50 | P-CHAT-22/23 | LOG | `audit_events: thread.renamed`, `thread.deleted` (single and bulk) | `server/endpoints/workspaceThreads.js:256,116,174` | no | no row before |
+| SE-CHAT-51 | P-CHAT-26 | LOG | `audit_events: chat.viewed_other_user` (admin chat list), `chat.deleted` / `chat.bulk_deleted` | `server/endpoints/system.js:1395,1425,1431` | no | no row before |
+| SE-CHAT-52 | `POST /workspace/:slug/update-pin` (path ID not checked) | LOG | `audit_events: document.pinned` | `server/endpoints/workspaces.js:799` | no | no row before |
+| SE-CHAT-53 | P-CHAT-28 | LOG | model router CRUD: no row yet; `router.*` actions are declared as pending for the access-policy branch (`server/utils/audit/routes/held.js`) | `server/endpoints/modelRouter.js` | n/a | not recorded in this PR |
 
 ---
 
