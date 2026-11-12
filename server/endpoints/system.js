@@ -1070,11 +1070,20 @@ function systemEndpoints(app) {
           return response.sendStatus(401).end();
         }
 
-        const { name = null } = reqBody(request);
-        const { apiKey, error } = await ApiKey.create(null, name);
+        // Single-user mode has no users to own a key; a key can still be narrowed
+        // to some workspaces and given an expiry.
+        const {
+          name = null,
+          workspaceIds = null,
+          expiresAt = null,
+        } = reqBody(request);
+        const { apiKey, error } = await ApiKey.create(null, name, {
+          workspaceIds,
+          expiresAt,
+        });
         await EventLogs.logEvent(
           "api_key_created",
-          { name: apiKey?.name },
+          { name: apiKey?.name, workspaceIds, expiresAt },
           response?.locals?.user?.id
         );
         return response.status(200).json({

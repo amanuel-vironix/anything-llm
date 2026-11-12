@@ -24,6 +24,8 @@ CREATE TABLE "access_policies" (
     "router_id" INTEGER,
     "allow_agents" BOOLEAN NOT NULL DEFAULT true,
     "agent_tools" TEXT,
+    "max_scheduled_jobs" INTEGER DEFAULT 5,
+    "min_job_interval_minutes" INTEGER DEFAULT 60,
     "created_by" INTEGER,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "lastUpdatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

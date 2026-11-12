@@ -1,10 +1,15 @@
 const { v4: uuidv4 } = require("uuid");
 const { Document } = require("../../../models/documents");
 const { Telemetry } = require("../../../models/telemetry");
-const { Workspace } = require("../../../models/workspace");
+const { User } = require("../../../models/user");
 const { getEmbeddingEngineSelection } = require("../../../utils/helpers");
 const { reqBody } = require("../../../utils/http");
-const { validApiKey } = require("../../../utils/middleware/validApiKey");
+const {
+  validApiKey,
+  apiKeyUser,
+  apiKeyWorkspace,
+  apiKeyWorkspaces,
+} = require("../../../utils/middleware/validApiKey");
 const { EventLogs } = require("../../../models/eventLogs");
 const {
   OpenAICompatibleChat,
@@ -54,7 +59,7 @@ function apiOpenAICompatibleEndpoints(app) {
     */
     try {
       const data = [];
-      const workspaces = await Workspace.where();
+      const workspaces = await apiKeyWorkspaces(response);
       for (const workspace of workspaces) {
         data.push({
           id: workspace.slug,
@@ -112,8 +117,20 @@ function apiOpenAICompatibleEndpoints(app) {
           temperature,
           stream = false,
         } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(model) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(model),
+        });
         if (!workspace) return response.status(401).end();
+        const user = apiKeyUser(response);
+        if (user && !(await User.canSendChat(user)))
+          return response.status(429).json({
+            id: uuidv4(),
+            type: "abort",
+            textResponse: null,
+            sources: [],
+            close: true,
+            error: `You have met your maximum 24 hour chat quota of ${user.dailyMessageLimit} chats. Try again later.`,
+          });
 
         const userMessage = messages.pop();
         if (userMessage?.role !== "user") {
@@ -137,6 +154,7 @@ function apiOpenAICompatibleEndpoints(app) {
         if (!stream) {
           const chatResult = await OpenAICompatibleChat.chatSync({
             workspace,
+            user,
             systemPrompt,
             history,
             prompt: extractTextContent(userMessage.content),
@@ -166,6 +184,7 @@ function apiOpenAICompatibleEndpoints(app) {
 
         await OpenAICompatibleChat.streamChat({
           workspace,
+          user,
           systemPrompt,
           history,
           prompt: extractTextContent(userMessage.content),
@@ -402,7 +421,7 @@ function apiOpenAICompatibleEndpoints(app) {
 
         const data = [];
         const VectorDBProvider = process.env.VECTOR_DB || "lancedb";
-        const workspaces = await Workspace.where();
+        const workspaces = await apiKeyWorkspaces(response);
 
         for (const workspace of workspaces) {
           data.push({

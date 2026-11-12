@@ -504,21 +504,24 @@ model model_router_rules {
 // Per-account access policy: which models, router and agent tools an account may use.
 // Assigned to a user (users.policy_id) or a team (teams.policy_id). No policy means today's behavior.
 model access_policies {
-  id               Int      @id @default(autoincrement())
-  name             String   @unique
-  description      String?
+  id                       Int      @id @default(autoincrement())
+  name                     String   @unique
+  description              String?
   // JSON array of { provider: string, model: string } where model "*" matches any model of the provider.
   // Null means no model restriction (a policy used only for tools or a router); [] allows nothing.
-  allowed_models   String?
-  default_provider String?
-  default_model    String?
-  router_id        Int? // model_routers.id; when set, chats for this account go through this router
-  allow_agents     Boolean  @default(true)
+  allowed_models           String?
+  default_provider         String?
+  default_model            String?
+  router_id                Int? // model_routers.id; when set, chats for this account go through this router
+  allow_agents             Boolean  @default(true)
   // JSON tool rule { allow: string[] | null, deny: string[] }; null means use the role default.
-  agent_tools      String?
-  created_by       Int?
-  createdAt        DateTime @default(now())
-  lastUpdatedAt    DateTime @default(now())
+  agent_tools              String?
+  // Scheduled-job limits, enforced by the later scheduled-jobs change.
+  max_scheduled_jobs       Int?     @default(5)
+  min_job_interval_minutes Int?     @default(60)
+  created_by               Int?
+  createdAt                DateTime @default(now())
+  lastUpdatedAt            DateTime @default(now())
 }
 
 model teams {

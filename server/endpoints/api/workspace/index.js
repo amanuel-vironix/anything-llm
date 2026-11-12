@@ -9,7 +9,13 @@ const {
   resolveProviderConnector,
 } = require("../../../utils/helpers");
 const { multiUserMode, reqBody, toBoundedInt } = require("../../../utils/http");
-const { validApiKey } = require("../../../utils/middleware/validApiKey");
+const {
+  validApiKey,
+  apiKeyUser,
+  apiKeyWorkspace,
+  apiKeyWorkspaceWhere,
+  apiKeyOwnThreadsOnly,
+} = require("../../../utils/middleware/validApiKey");
 const { VALID_CHAT_MODE } = require("../../../utils/chats/stream");
 const { EventLogs } = require("../../../models/eventLogs");
 const {
@@ -79,7 +85,7 @@ function apiWorkspaceEndpoints(app) {
       const { name = null, ...additionalFields } = reqBody(request);
       const { workspace, message } = await Workspace.new(
         name,
-        null,
+        apiKeyUser(response)?.id ?? null,
         additionalFields
       );
 
@@ -141,10 +147,14 @@ function apiWorkspaceEndpoints(app) {
     }
     */
     try {
+      const owner = apiKeyUser(response);
       const workspaces = await Workspace._findMany({
-        where: {},
+        where: await apiKeyWorkspaceWhere(response),
         include: {
           threads: {
+            ...(apiKeyOwnThreadsOnly(response)
+              ? { where: { user_id: owner.id } }
+              : {}),
             select: {
               user_id: true,
               slug: true,
@@ -203,13 +213,17 @@ function apiWorkspaceEndpoints(app) {
     */
     try {
       const { slug } = request.params;
+      const owner = apiKeyUser(response);
       const workspace = await Workspace._findMany({
         where: {
-          slug: String(slug),
+          AND: [{ slug: String(slug) }, await apiKeyWorkspaceWhere(response)],
         },
         include: {
           documents: true,
           threads: {
+            ...(apiKeyOwnThreadsOnly(response)
+              ? { where: { user_id: owner.id } }
+              : {}),
             select: {
               user_id: true,
               slug: true,
@@ -247,7 +261,9 @@ function apiWorkspaceEndpoints(app) {
       try {
         const { slug = "" } = request.params;
         const VectorDb = getVectorDbClass();
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!workspace) {
           response.sendStatus(400).end();
@@ -335,7 +351,9 @@ function apiWorkspaceEndpoints(app) {
       try {
         const { slug = null } = request.params;
         const data = reqBody(request);
-        const currWorkspace = await Workspace.get({ slug: String(slug) });
+        const currWorkspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!currWorkspace) {
           response.sendStatus(400).end();
@@ -424,7 +442,9 @@ function apiWorkspaceEndpoints(app) {
           limit = 100,
           orderBy = "asc",
         } = request.query;
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!workspace) {
           response.sendStatus(400).end();
@@ -511,7 +531,9 @@ function apiWorkspaceEndpoints(app) {
       try {
         const { slug = null } = request.params;
         const { adds = [], deletes = [] } = reqBody(request);
-        const currWorkspace = await Workspace.get({ slug: String(slug) });
+        const currWorkspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!currWorkspace) {
           response.sendStatus(400).end();
@@ -579,7 +601,9 @@ function apiWorkspaceEndpoints(app) {
       try {
         const { slug = null } = request.params;
         const { docPath, pinStatus = false } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
         if (!workspace) return response.sendStatus(404).end();
 
         const document = await Document.get({
@@ -665,7 +689,9 @@ function apiWorkspaceEndpoints(app) {
           attachments = [],
           reset = false,
         } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!workspace) {
           response.status(400).json({
@@ -701,7 +727,7 @@ function apiWorkspaceEndpoints(app) {
           workspace,
           message,
           mode: resolvedMode,
-          user: null,
+          user: apiKeyUser(response),
           thread: null,
           sessionId: !!sessionId ? String(sessionId) : null,
           attachments,
@@ -820,7 +846,9 @@ function apiWorkspaceEndpoints(app) {
           attachments = [],
           reset = false,
         } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!workspace) {
           response.status(400).json({
@@ -863,7 +891,7 @@ function apiWorkspaceEndpoints(app) {
           workspace,
           message,
           mode: resolvedMode,
-          user: null,
+          user: apiKeyUser(response),
           thread: null,
           sessionId: !!sessionId ? String(sessionId) : null,
           attachments,
@@ -956,7 +984,9 @@ function apiWorkspaceEndpoints(app) {
       try {
         const { slug } = request.params;
         const { query, topN, scoreThreshold } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(slug) });
+        const workspace = await apiKeyWorkspace(response, {
+          slug: String(slug),
+        });
 
         if (!workspace)
           return response.status(400).json({
