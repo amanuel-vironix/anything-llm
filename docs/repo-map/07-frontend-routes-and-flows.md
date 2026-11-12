@@ -330,7 +330,14 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
 - **State changes**: `localStorage.anythingllm_user`, `anythingllm_authToken`.
 - **Side effects**: SE-UI-04, SE-UI-05, SE-UI-06 (file download), SE-UI-07 (clipboard).
 - **Failure and edge paths**: error message shown in form; `?nt=1` (`paths.login(true)`,
-  `utils/paths.js:26-28`) skips the token re-check.
+  `utils/paths.js:26-28`) skips the token re-check. With password sign-in turned off, a non-admin
+  gets `[006]` from `/request-token`.
+- **Google sign-in**: when `/setup-complete` reports `OidcEnabled`, the form shows **Sign in with
+  Google** (`components/Modals/Password/GoogleSignInButton.jsx`, rendered at
+  `MultiUserAuth.jsx:336`): a full-page link to `${API_BASE}/auth/oidc/start` (P-AUTH-36). A refused
+  sign-in returns to `/login?sso_error=<reason>`, and the button shows a fixed message for that
+  reason (no server text is rendered). On success the server redirects to `/sso/simple?token=`
+  (P-UI-06).
 
 ### P-UI-05 Account recovery and password reset
 
@@ -347,17 +354,19 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
 
 ### P-UI-06 Simple SSO passthrough
 
-- **Actor and preconditions**: Simple SSO enabled; a temporary token issued elsewhere.
-- **Steps**: `/sso/simple?token=…&redirectTo=…` (`pages/Login/SSO/simple.jsx:8-53`): clear auth keys
-  (`:19-21`), `GET /request-token/sso/simple?token=` (`:23`; `models/system.js:811-812`) →
-  `simpleSSOEnabled` (`server/endpoints/system.js:360`); store user, token and timestamp
-  (`:27-29`); `window.location.replace(redirectTo || "/")` (`:10, :49`).
+- **Actor and preconditions**: Simple SSO enabled with a token issued through the developer API, or
+  Google sign-in enabled with a token issued by the OIDC callback (P-AUTH-37).
+- **Steps**: `/sso/simple?token=…&redirectTo=…` (`pages/Login/SSO/simple.jsx`): clear auth keys,
+  `GET /request-token/sso/simple?token=` (`models/system.js:811-812`) → `simpleSSOOrOidcToken`
+  (`server/endpoints/system.js:391`); store user, token and timestamp;
+  `window.location.replace(redirectPath)`, where `redirectPath = safeRedirectPath(redirectTo, "/")`
+  (`:13`; `utils/safeRedirect.js`).
 - **State changes**: auth keys replaced.
-- **Side effects**: SE-UI-04, SE-UI-09 (redirect to a query-string URL).
-- **Failure and edge paths**: missing/invalid token shows an error page (`:40-48`).
-- **Notes**: `redirectTo` is not validated on the client; an absolute URL would be followed after a
-  successful login (open-redirect shape). Whether the server constrains it was not checked
-  (unverified).
+- **Side effects**: SE-UI-04, SE-UI-09 (redirect to a same-origin path from the query string).
+- **Failure and edge paths**: missing/invalid token shows an error page.
+- **Notes**: `safeRedirectPath` accepts only a same-origin path; absolute URLs, protocol-relative
+  `//host`, backslash tricks and control characters fall back to `/` (F-11, fixed in `169b68a0`;
+  `frontend/src/utils/safeRedirect.test.mjs`, run with `yarn test:utils`).
 
 ### P-UI-07 Accept invite
 
@@ -368,6 +377,10 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
   (`:34`) → store user+token, `window.location = "/"` (`:36-38`).
 - **State changes**: user row created (server), invite claimed (server); auth keys stored.
 - **Side effects**: SE-UI-04, SE-UI-05.
+- **Google sign-in**: when `OidcEnabled`, the invite modal also shows **Sign in with Google**
+  (`pages/Invite/NewUserModal/index.jsx:52`), which starts `/auth/oidc/start?invite=<code>`; the
+  callback claims the invite and links the Google account (P-AUTH-37). With password sign-in
+  turned off, the password form's `POST /invite/:code` returns 403.
 
 ### P-UI-08 Logout
 
@@ -777,6 +790,11 @@ Ctrl/Meta 3 s on the settings sidebar unlocks hidden previews and stores
   (`:234-241`) → both `vR` only (`server/endpoints/system.js:619,665`); the password route refuses
   in multi-user in-handler (`:625-628`), enable-multi-user refuses if already on (`:670-676`).
 - **Side effects**: SE-UI-10, SE-UI-05.
+- **Google sign-in section** (multi-user admin; `pages/GeneralSettings/Security/GoogleSignIn.jsx`,
+  rendered at `index.jsx:35`): loads `GET /admin/oidc-settings` and saves the whole form with
+  `POST /admin/oidc-settings` (`models/admin.js:7-30`; P-AUTH-38). Fields set by an `OIDC_*` env
+  variable are read-only; the server returns per-field errors and saves nothing when any field is
+  invalid. Renders nothing for non-admins (the GET fails).
 - **Notes**: F-11.
 
 ### P-UI-40 Customization pages
@@ -932,7 +950,8 @@ caching; the only SW is the push worker (`public/service-workers/` contains one 
    skimmed through grep; no server calls were found in them.
 3. Whether `DnDWrapper`'s oversized-attachment warning hides the "embed" choice for `default` users
    (F-8) was not confirmed.
-4. Whether the server constrains SSO `redirectTo` (P-UI-06) was not checked; the client does not.
+4. The server does not constrain SSO `redirectTo` (P-UI-06); since `169b68a0` the client accepts
+   only same-origin paths (`utils/safeRedirect.js`).
 5. Agent invocation uuid lifetime and reuse (F-10) are server/agent-domain questions; only
    `agentWebsocket.js:29-70` was read.
 6. `chatHistoryViewable` internals and the exact env flag were not read.

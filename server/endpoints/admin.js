@@ -5,6 +5,7 @@ const { EventLogs } = require("../models/eventLogs");
 const { Invite } = require("../models/invite");
 const { SystemSettings } = require("../models/systemSettings");
 const { User } = require("../models/user");
+const { UserIdentity } = require("../models/userIdentity");
 const { DocumentVectors } = require("../models/vectors");
 const { Workspace } = require("../models/workspace");
 const { WorkspaceChats } = require("../models/workspaceChats");
@@ -44,7 +45,14 @@ function adminEndpoints(app) {
     async (_request, response) => {
       try {
         const users = await User.where();
-        response.status(200).json({ users });
+        // Google accounts linked to each user, shown on the Users page.
+        const identities = await UserIdentity.forUsers(users.map((u) => u.id));
+        response.status(200).json({
+          users: users.map((user) => ({
+            ...user,
+            identities: identities[user.id] || [],
+          })),
+        });
       } catch (e) {
         console.error(e);
         response.sendStatus(500).end();
@@ -144,8 +152,16 @@ function adminEndpoints(app) {
           return;
         }
 
+        const { success, error } = await User.deleteWithReason({
+          id: Number(id),
+        });
+        if (!success) {
+          response.status(200).json({ success: false, error });
+          return;
+        }
+        // Extension keys also cascade with the user row; kept as before, now
+        // after the delete so a refused delete leaves the keys in place.
         await BrowserExtensionApiKey.deleteAllForUser(Number(id));
-        await User.delete({ id: Number(id) });
         await EventLogs.logEvent(
           "user_deleted",
           {

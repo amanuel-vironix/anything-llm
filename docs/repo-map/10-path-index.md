@@ -2,7 +2,7 @@
 
 Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerate after changing a domain file (see README).
 
-256 paths across 8 domain files.
+259 paths across 8 domain files.
 
 ## [01-auth-and-users.md](01-auth-and-users.md)
 
@@ -43,6 +43,9 @@ Generated from the `P-*` headings in files 01-08. Do not edit by hand; regenerat
 | [P-AUTH-33](01-auth-and-users.md#p-auth-33--access-policy-administration-and-assignment) | Access policy administration and assignment |
 | [P-AUTH-34](01-auth-and-users.md#p-auth-34--team-administration-admin) | Team administration (admin) |
 | [P-AUTH-35](01-auth-and-users.md#p-auth-35--team-lead-manages-members) | Team lead manages members |
+| [P-AUTH-36](01-auth-and-users.md#p-auth-36--google-oidc-sign-in-start) | Google (OIDC) sign-in: start |
+| [P-AUTH-37](01-auth-and-users.md#p-auth-37--google-oidc-sign-in-callback) | Google (OIDC) sign-in: callback |
+| [P-AUTH-38](01-auth-and-users.md#p-auth-38--google-sign-in-settings) | Google sign-in settings |
 
 ## [02-workspaces-and-chat.md](02-workspaces-and-chat.md)
 
