@@ -54,7 +54,7 @@ This file covers identity, sessions and accounts. That means first-run setup, si
 
 | Invariant | Enforced? | Where |
 |---|---|---|
-| At least one **active** (unsuspended) admin exists after a role change, suspension or delete | **Yes** (fixed in `238fe3f3`, F-09 / SMF-13) | `User._withActiveAdminGuard` (`server/models/user.js`) re-reads the target inside the transaction to decide whether the write removes an active admin, runs the write, then counts `role=admin, suspended=0` and throws `lastAdminError` when none remain. `User.update` uses it for every change to `role` or `suspended`, and `User.delete`/`deleteWithReason` for every delete, so a decision can't rest on a stale read taken before a concurrent promotion. `canModifyAdmin` (`server/utils/helpers/admin/index.js`) remains as an early, friendlier check. Only the enable-multi-user rollback passes `allowNoActiveAdmin` |
+| At least one **active** (unsuspended) admin exists after a role change, suspension or delete | **Yes** (fixed in `169b68a0`, F-09 / SMF-13) | `User._withActiveAdminGuard` (`server/models/user.js`) re-reads the target inside the transaction to decide whether the write removes an active admin, runs the write, then counts `role=admin, suspended=0` and throws `lastAdminError` when none remain. `User.update` uses it for every change to `role` or `suspended`, and `User.delete`/`deleteWithReason` for every delete, so a decision can't rest on a stale read taken before a concurrent promotion. `canModifyAdmin` (`server/utils/helpers/admin/index.js`) remains as an early, friendlier check. Only the enable-multi-user rollback passes `allowNoActiveAdmin` |
 | Admin-count check is atomic | **Yes** | the guard is write-then-count inside one transaction; tested with concurrent suspends and deletes (`server/__tests__/models/userLastAdminGuard.test.js`) |
 | Managers cannot raise anyone to admin, or touch admins | Yes, in the UI routes | `validRoleSelection`/`validCanModify` `server/utils/helpers/admin/index.js:7-50` |
 | The developer API respects roles | **No.** Any API key acts as a super-admin | `server/endpoints/api/admin/index.js:85-136` (create any role), `:143-208` (update any user) |
@@ -294,7 +294,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Steps:**
   1. GET `/v1/users/:id/issue-auth-token` → validApiKey → simpleSSOEnabled (`server/endpoints/api/userManagement/index.js:67-70`).
   2. `User.get({id})`, 404 if missing (`:105-107`).
-  3. `TemporaryAuthToken.issue(userId)`: in one transaction, deletes that user's existing temp tokens and creates `allm-tat-<uuid-apikey>` with a 10-minute expiry (`server/models/temporaryAuthToken.js:33-55`). Concurrent issues leave exactly one live token (SMF-32, fixed in `238fe3f3`; `server/__tests__/models/temporaryAuthTokenIssue.test.js`).
+  3. `TemporaryAuthToken.issue(userId)`: in one transaction, deletes that user's existing temp tokens and creates `allm-tat-<uuid-apikey>` with a 10-minute expiry (`server/models/temporaryAuthToken.js:33-55`). Concurrent issues leave exactly one live token (SMF-32, fixed in `169b68a0`; `server/__tests__/models/temporaryAuthTokenIssue.test.js`).
   4. Returns `{token, loginPath:"/sso/simple?token=…"}` (`server/endpoints/api/userManagement/index.js:112-115`).
 - **State changes:** `temporary_auth_tokens`: the user's rows are deleted and one row is created.
 - **Side effects:** SE-AUTH-18 (DB). No event log for issuance.
@@ -333,7 +333,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   6. The client then logs in through `/request-token` (`frontend/src/pages/Invite/NewUserModal/index.jsx:34`). The invite page also offers **Sign in with Google**, which claims the invite through P-AUTH-32.
 - **State changes:** `users`: row created. `invites.status: pending → claimed`, `invites.claimedBy: null → userId`. `workspace_users`: rows created.
 - **Side effects:** SE-AUTH-24 (DB `users`, `invites`, `workspace_users`), SE-AUTH-25 (LOG).
-- **Failure and edge paths:** an invite that is not pending, or was claimed or disabled by a concurrent request, makes the whole transaction roll back: no user is created (SMF-14, fixed in `238fe3f3`; `server/__tests__/endpoints/inviteClaim.test.js`). Workspace-assignment errors are still swallowed.
+- **Failure and edge paths:** an invite that is not pending, or was claimed or disabled by a concurrent request, makes the whole transaction roll back: no user is created (SMF-14, fixed in `169b68a0`; `server/__tests__/endpoints/inviteClaim.test.js`). Workspace-assignment errors are still swallowed.
 - **Notes:** the route does not check multi-user mode. The role is hard-coded to `default`.
 
 ### P-AUTH-14 — List and disable invites
@@ -374,7 +374,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   - `dailyMessageLimit` omitted is fine. An explicit `undefined` cast gives `NaN`, which throws.
   - Suspension takes effect at the next VR call. Existing tokens are not revoked, and unsuspending restores them.
   - A manager can suspend or delete **other managers, and themself**.
-  - Suspending or demoting the last active admin is refused with "No active system admins will remain if you do this." (F-09, fixed in `238fe3f3`).
+  - Suspending or demoting the last active admin is refused with "No active system admins will remain if you do this." (F-09, fixed in `169b68a0`).
   - An admin can set another user's password without knowing the old one, and that user's existing sessions continue.
 
 ### P-AUTH-17 — Admin or manager deletes a user
@@ -387,7 +387,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **State changes:** `users`: row deleted. `workspace_chats.user_id: id → null`, `include: * → false`. Cascades (`server/prisma/schema.prisma`): `recovery_codes`, `password_reset_tokens`, `temporary_auth_tokens`, `browser_extension_api_keys`, `desktop_mobile_devices`, `workspace_threads`, `workspace_users`, `slash_command_presets`, `system_prompt_variables`, `workspace_parsed_files`, `memories`, `workspace_agent_invocations`: rows deleted.
 - **Side effects:** SE-AUTH-32 (DB), SE-AUTH-33 (LOG).
 - **Failure and edge paths:**
-  - Deleting the last active admin is refused (F-09 / SMF-13, fixed in `238fe3f3`; `server/__tests__/models/userLastAdminGuard.test.js`). The developer API delete (`server/endpoints/api/admin/index.js:258`) uses the same guard.
+  - Deleting the last active admin is refused (F-09 / SMF-13, fixed in `169b68a0`; `server/__tests__/models/userLastAdminGuard.test.js`). The developer API delete (`server/endpoints/api/admin/index.js:258`) uses the same guard.
   - A failed delete is now reported as `{success:false,error}` instead of success.
 - **Notes:**
   - `api_keys` created by the user are **not** deleted (no relation, `server/prisma/schema.prisma:18-25`).
@@ -454,7 +454,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 - **Side effects:** SE-AUTH-40 (DB), SE-AUTH-31 (LOG `user_updated`, which records the change without the password).
 - **Failure and edge paths:**
   - Empty or mismatched passwords throw, so the endpoint returns **500** with the message (`server/endpoints/system.js:445-447`), not 400.
-  - A rejected password (complexity) leaves the token, the recovery codes and `seen_recovery_codes` untouched. Two concurrent resets with one token: only one succeeds (F-10 / SMF-15, fixed in `238fe3f3`; `server/__tests__/utils/PasswordRecovery/resetPassword.test.js`). Recovery is still unlogged and not rate limited (F-08).
+  - A rejected password (complexity) leaves the token, the recovery codes and `seen_recovery_codes` untouched. Two concurrent resets with one token: only one succeeds (F-10 / SMF-15, fixed in `169b68a0`; `server/__tests__/utils/PasswordRecovery/resetPassword.test.js`). Recovery is still unlogged and not rate limited (F-08).
 - **Notes:** existing JWTs survive a password reset.
 
 ### P-AUTH-23 — Developer API keys, single-user mode
@@ -589,7 +589,7 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
 | active or suspended | deleted | DELETE `/admin/user/:id`, `/v1/admin/users/:id`, enable-multi-user rollback (deletes all) | `server/models/user.js:311-325` |
 | role default ↔ manager ↔ admin | — | update with `role` (guards in `server/utils/helpers/admin/index.js`) | `server/endpoints/admin.js:88-127` |
 | `seen_recovery_codes` false → true | — | first successful password login | `server/utils/PasswordRecovery/index.js:26-28` |
-| `seen_recovery_codes` true → false | — | a successful password reset only (same transaction as the password write; fixed in `238fe3f3`) | `server/utils/PasswordRecovery/index.js:102-115` |
+| `seen_recovery_codes` true → false | — | a successful password reset only (same transaction as the password write; fixed in `169b68a0`) | `server/utils/PasswordRecovery/index.js:102-115` |
 | none | active, with a linked `user_identities` row | first Google sign-in (`auto`) or Google invite claim | `server/utils/auth/oidc.js:221,259` |
 
 ### Session JWT (multi-user)
@@ -705,7 +705,7 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 3. What `UserMetaCache.setFromRequest` stores (`server/utils/userLocale`, not read).
 4. Whether `Telemetry.sendTelemetry` is a no-op when `DISABLE_TELEMETRY=true`. `connect()` was not read beyond `server/models/telemetry.js:89-109`.
 5. Whether Telegram, embed or developer API chat paths call `canSendChat`. Only the grep result was checked: no calls outside the six sites listed in P-AUTH-30.
-6. The race in `canModifyAdmin` (count-then-update with no transaction) was demonstrated by tests and fixed in `238fe3f3` with a write-then-count guard in one transaction.
+6. The race in `canModifyAdmin` (count-then-update with no transaction) was demonstrated by tests and fixed in `169b68a0` with a write-then-count guard in one transaction.
 7. `EncryptionManager` key source and rotation (`server/utils/EncryptionManager`, not read). The comment at `server/utils/middleware/validatedRequest.js:53-57` says it is persistent.
 8. Whether the frontend renders or ever uses the leaked `user.password` hash in the browser-extension key list (P-AUTH-26). The server response includes it either way.
 9. Whether `JWT_SECRET` from `docker/.env.example` (commented out) means a fresh Docker install runs in single-user open mode until a password is set. Consistent with `server/utils/middleware/validatedRequest.js:16-24`, but deployment defaults were not checked.

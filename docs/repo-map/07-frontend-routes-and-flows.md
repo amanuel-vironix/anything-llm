@@ -365,7 +365,7 @@ the gaps are (F-2, and the `flex[admin, manager]` set in P-UI-16 which managers 
 - **Side effects**: SE-UI-04, SE-UI-09 (redirect to a same-origin path from the query string).
 - **Failure and edge paths**: missing/invalid token shows an error page.
 - **Notes**: `safeRedirectPath` accepts only a same-origin path; absolute URLs, protocol-relative
-  `//host`, backslash tricks and control characters fall back to `/` (F-11, fixed in `238fe3f3`;
+  `//host`, backslash tricks and control characters fall back to `/` (F-11, fixed in `169b68a0`;
   `frontend/src/utils/safeRedirect.test.mjs`, run with `yarn test:utils`).
 
 ### P-UI-07 Accept invite
@@ -950,7 +950,7 @@ caching; the only SW is the push worker (`public/service-workers/` contains one 
    skimmed through grep; no server calls were found in them.
 3. Whether `DnDWrapper`'s oversized-attachment warning hides the "embed" choice for `default` users
    (F-8) was not confirmed.
-4. The server does not constrain SSO `redirectTo` (P-UI-06); since `238fe3f3` the client accepts
+4. The server does not constrain SSO `redirectTo` (P-UI-06); since `169b68a0` the client accepts
    only same-origin paths (`utils/safeRedirect.js`).
 5. Agent invocation uuid lifetime and reuse (F-10) are server/agent-domain questions; only
    `agentWebsocket.js:29-70` was read.
