@@ -87,6 +87,25 @@ model users {
   desktop_mobile_devices       desktop_mobile_devices[]
   workspace_parsed_files       workspace_parsed_files[]
   memories                     memories[]
+  user_identities              user_identities[]
+}
+
+// An account at an outside identity provider (Google sign-in) linked to a
+// user. Linked by the ID token's `sub`, never by email, because an email
+// address can be reassigned. `users` has no email column, so the email from
+// the provider is kept here.
+model user_identities {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  provider    String
+  subject     String
+  email       String?
+  createdAt   DateTime  @default(now())
+  lastLoginAt DateTime?
+  user        users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([user_id])
 }
 
 model recovery_codes {

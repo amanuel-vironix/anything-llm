@@ -2,6 +2,7 @@ const { EventLogs } = require("../models/eventLogs");
 const { Invite } = require("../models/invite");
 const { User } = require("../models/user");
 const { reqBody } = require("../utils/http");
+const { passwordLoginRestricted } = require("../utils/auth/oidcSettings");
 const {
   simpleSSOLoginDisabledMiddleware,
 } = require("../utils/middleware/simpleSSOEnabled");
@@ -62,6 +63,17 @@ function inviteEndpoints(app) {
           response
             .status(200)
             .json({ success: false, error: "Invite not found or is invalid." });
+          return;
+        }
+
+        // A password account could not sign in while password sign-in is
+        // limited to admins; invitees accept with Google instead.
+        if (await passwordLoginRestricted()) {
+          response.status(403).json({
+            success: false,
+            error:
+              "Password accounts are turned off. Accept this invite with Google.",
+          });
           return;
         }
 

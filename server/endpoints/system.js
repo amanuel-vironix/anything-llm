@@ -69,9 +69,12 @@ const {
   chatHistoryViewable,
 } = require("../utils/middleware/chatHistoryViewable");
 const {
-  simpleSSOEnabled,
+  simpleSSOOrOidcToken,
+  isOidcLoginToken,
   simpleSSOLoginDisabled,
 } = require("../utils/middleware/simpleSSOEnabled");
+const { passwordLoginRestricted } = require("../utils/auth/oidcSettings");
+const { oidcSessionExpiry } = require("../utils/auth/oidc");
 const { TemporaryAuthToken } = require("../models/temporaryAuthToken");
 const { SystemPromptVariables } = require("../models/systemPromptVariables");
 const { isReservedCommand } = require("../utils/chats");
@@ -277,6 +280,32 @@ function systemEndpoints(app) {
           return;
         }
 
+        // With Google sign-in on and password sign-in turned off, passwords
+        // still work for admins, so a Google misconfiguration cannot lock
+        // everyone out. Checked after the password, like suspension, so it
+        // reveals nothing to someone without the right password.
+        if (
+          existingUser.role !== ROLES.admin &&
+          (await passwordLoginRestricted())
+        ) {
+          await EventLogs.logEvent(
+            "failed_login_password_disabled",
+            {
+              ip: request.ip || "Unknown IP",
+              username: existingUser.username,
+            },
+            existingUser.id
+          );
+          response.status(200).json({
+            user: null,
+            valid: false,
+            token: null,
+            message:
+              "[006] Password sign-in is turned off. Sign in with Google instead.",
+          });
+          return;
+        }
+
         await Telemetry.sendTelemetry(
           "login_event",
           { multiUserMode: false },
@@ -359,11 +388,22 @@ function systemEndpoints(app) {
 
   app.get(
     "/request-token/sso/simple",
-    [simpleSSOEnabled],
+    [simpleSSOOrOidcToken],
     async (request, response) => {
       const { token: tempAuthToken } = request.query;
-      const { sessionToken, token, error } =
-        await TemporaryAuthToken.validate(tempAuthToken);
+      const fromOidc = isOidcLoginToken(tempAuthToken);
+      const validated = await TemporaryAuthToken.validate(tempAuthToken);
+      const { token, error } = validated;
+      // Sessions started through Google sign-in are shorter
+      // (OIDC_SESSION_EXPIRY, default 12h), so disabling someone's Google
+      // account ends their AnythingLLM access within that time.
+      const sessionToken =
+        fromOidc && !error
+          ? makeJWT(
+              { id: token.user.id, username: token.user.username },
+              oidcSessionExpiry()
+            )
+          : validated.sessionToken;
 
       if (error) {
         await EventLogs.logEvent("failed_login_invalid_temporary_auth_token", {

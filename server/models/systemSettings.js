@@ -643,6 +643,12 @@ const SystemSettings = {
       SimpleSSONoLoginRedirect: this.simpleSSO.noLoginRedirect(),
 
       // --------------------------------------------------------
+      // Google (OIDC) sign-in: whether to show the button and whether
+      // password sign-in is limited to admins. No secrets here.
+      // --------------------------------------------------------
+      ...(await this.oidcPublicSettings()),
+
+      // --------------------------------------------------------
       // Agent Skill Settings
       // --------------------------------------------------------
       AgentSkillMaxToolCalls: AIbitat.defaultMaxToolCalls(),
@@ -1147,6 +1153,26 @@ const SystemSettings = {
     } catch (error) {
       console.error(error.message);
       return { connectionKey: null };
+    }
+  },
+
+  /**
+   * The Google sign-in settings the login page needs.
+   * @returns {Promise<{OidcEnabled: boolean, OidcPasswordLoginDisabled: boolean}>}
+   */
+  oidcPublicSettings: async function () {
+    try {
+      const { getOidcSettings } = require("../utils/auth/oidcSettings");
+      const { enabled, passwordLoginDisabled } = await getOidcSettings();
+      const multiUserMode = await this.isMultiUserMode();
+      return {
+        OidcEnabled: enabled && multiUserMode,
+        OidcPasswordLoginDisabled:
+          enabled && multiUserMode && passwordLoginDisabled,
+      };
+    } catch (error) {
+      console.error("Could not read Google sign-in settings.", error.message);
+      return { OidcEnabled: false, OidcPasswordLoginDisabled: false };
     }
   },
 
