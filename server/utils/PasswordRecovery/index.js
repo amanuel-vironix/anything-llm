@@ -119,9 +119,11 @@ async function resetPassword(token, _newPassword = "", confirmPassword = "") {
     return { success: false, message: "Invalid reset token" };
   }
 
+  // Its own event, so the audit log can tell a reset with recovery codes
+  // from an admin edit (the audit branch maps it to auth.password_reset).
   await EventLogs.logEvent(
-    "user_updated",
-    { username: user.username, changes: {} },
+    "password_reset",
+    { username: user.username },
     userId
   );
   return { success: true, message: "Password reset successful" };

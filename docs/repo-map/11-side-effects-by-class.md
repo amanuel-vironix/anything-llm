@@ -2,7 +2,7 @@
 
 Generated from the side-effect ledgers in files 01-08. Do not edit by hand; regenerate after changing a ledger (see README). A row with several classes appears under each.
 
-317 ledger rows.
+318 ledger rows.
 
 | Class | Rows |
 |---|---|
@@ -15,7 +15,7 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [PUSH](#push) | 6 |
 | [ENV](#env) | 14 |
 | [CACHE](#cache) | 29 |
-| [LOG](#log) | 41 |
+| [LOG](#log) | 42 |
 | [TEL](#tel) | 28 |
 | [TIME](#time) | 10 |
 | [OTHER](#other) | 6 |
@@ -377,13 +377,14 @@ Generated from the side-effect ledgers in files 01-08. Do not edit by hand; rege
 | [SE-AUTH-25](01-auth-and-users.md) | LOG | `invite_accepted` | P-AUTH-13 | `server/endpoints/invite.js:77` |  |  |
 | [SE-AUTH-27](01-auth-and-users.md) | LOG | `invite_deleted` | P-AUTH-14 | `server/endpoints/admin.js:215` |  | logged even if not found |
 | [SE-AUTH-29](01-auth-and-users.md) | LOG | `user_created` | P-AUTH-15 | `server/endpoints/admin.js:70` |  |  |
-| [SE-AUTH-31](01-auth-and-users.md) | LOG | `user_updated` (userId = target, not actor) | P-AUTH-16/19/20/22 | `server/models/user.js:206` |  |  |
+| [SE-AUTH-31](01-auth-and-users.md) | LOG | `user_updated` (userId = target, not actor) | P-AUTH-16/19/20 | `server/models/user.js:206` |  |  |
 | [SE-AUTH-33](01-auth-and-users.md) | LOG | `user_deleted` | P-AUTH-17 | `server/endpoints/admin.js:146` |  |  |
 | [SE-AUTH-35](01-auth-and-users.md) | LOG | `api_user_deleted` (no actor) | P-AUTH-18 | `server/endpoints/api/admin/index.js:259` |  | create/update not logged |
 | [SE-AUTH-42](01-auth-and-users.md) | LOG | `api_key_created` / `api_key_deleted` | P-AUTH-23/24 | `server/endpoints/system.js:1075,1107`; `server/endpoints/admin.js:531,556` |  |  |
 | [SE-AUTH-51](01-auth-and-users.md) | LOG | `failed_login_oidc` (reason, email, detail), `user_created_oidc`, `login_event {method:"oidc"}` | P-AUTH-32 | `server/endpoints/auth/oidc.js:87,112-122,131` |  | email stored in `event_logs` |
 | [SE-AUTH-54](01-auth-and-users.md) | LOG | `oidc_settings_updated` | P-AUTH-33 | `server/endpoints/auth/oidc.js:166` |  |  |
 | [SE-AUTH-55](01-auth-and-users.md) | LOG | `failed_login_password_disabled` | P-AUTH-06 | `server/endpoints/system.js:292` |  |  |
+| [SE-AUTH-56](01-auth-and-users.md) | LOG | `password_reset` (username only) | P-AUTH-22 | `server/utils/PasswordRecovery/index.js:122` |  | was `user_updated` before this branch |
 | [SE-CHAT-03](02-workspaces-and-chat.md) | LOG | `event_logs` `workspace_created` | P-CHAT-02 | `workspaces.js:75` | no |  |
 | [SE-CHAT-06](02-workspaces-and-chat.md) | LOG | `workspace_prompt_changed` (log includes full prompts) | P-CHAT-03 | `workspace.js:547-555` | no |  |
 | [SE-CHAT-10](02-workspaces-and-chat.md) | LOG | `workspace_deleted` | P-CHAT-04 | `workspaces.js:325` | no |  |

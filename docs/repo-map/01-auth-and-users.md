@@ -449,9 +449,9 @@ Frontend route guards mirror this loosely. `AdminRoute` allows `role === "admin"
   2. `resetPassword`: trim, then throw on empty or mismatch (`server/utils/PasswordRecovery/index.js:74-77`).
   3. Look up the token, check expiry, and check password complexity **before any write**.
   4. One transaction (`server/utils/PasswordRecovery/index.js:102-115`): consume the token with a conditional `deleteMany` (by id, `expiresAt >= now`, count must be 1), set the new password and `seen_recovery_codes=false`, then delete the user's other reset tokens and recovery codes.
-  5. Log `user_updated` with `changes:{}` (no password).
+  5. Log `password_reset` with the username (no password).
 - **State changes:** `users.password: old → new`. `users.seen_recovery_codes: true → false`. `password_reset_tokens` and `recovery_codes`: rows deleted.
-- **Side effects:** SE-AUTH-40 (DB), SE-AUTH-31 (LOG `user_updated`, which records the change without the password).
+- **Side effects:** SE-AUTH-40 (DB), SE-AUTH-56 (LOG `password_reset`).
 - **Failure and edge paths:**
   - Empty or mismatched passwords throw, so the endpoint returns **500** with the message (`server/endpoints/system.js:445-447`), not 400.
   - A rejected password (complexity) leaves the token, the recovery codes and `seen_recovery_codes` untouched. Two concurrent resets with one token: only one succeeds (F-10 / SMF-15, fixed in `169b68a0`; `server/__tests__/utils/PasswordRecovery/resetPassword.test.js`). Recovery is still unlogged and not rate limited (F-08).
@@ -659,7 +659,7 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 | SE-AUTH-28 | P-AUTH-15 | DB | `users` create | `server/models/user.js:126` | delete | |
 | SE-AUTH-29 | P-AUTH-15 | LOG | `user_created` | `server/endpoints/admin.js:70` | | |
 | SE-AUTH-30 | P-AUTH-16 | DB | `users.*` | `server/models/user.js:201` | yes | |
-| SE-AUTH-31 | P-AUTH-16/19/20/22 | LOG | `user_updated` (userId = target, not actor) | `server/models/user.js:206` | | |
+| SE-AUTH-31 | P-AUTH-16/19/20 | LOG | `user_updated` (userId = target, not actor) | `server/models/user.js:206` | | |
 | SE-AUTH-32 | P-AUTH-17 | DB | `browser_extension_api_keys` delete; `workspace_chats` detach; `users` delete + cascades | `server/endpoints/admin.js:144-145`; `server/models/user.js:313-319` | **no** | |
 | SE-AUTH-33 | P-AUTH-17 | LOG | `user_deleted` | `server/endpoints/admin.js:146` | | |
 | SE-AUTH-34 | P-AUTH-18 | DB | `users`, `invites` | `server/endpoints/api/admin/index.js:135,207,258,364,424` | | |
@@ -684,6 +684,7 @@ created → deleted. Neither expires. Browser keys are also deleted by user dele
 | SE-AUTH-53 | P-AUTH-33 | CACHE | OIDC client cache reset | `server/utils/auth/oidc.js:47` | | |
 | SE-AUTH-54 | P-AUTH-33 | LOG | `oidc_settings_updated` | `server/endpoints/auth/oidc.js:166` | | |
 | SE-AUTH-55 | P-AUTH-06 | LOG | `failed_login_password_disabled` | `server/endpoints/system.js:292` | | |
+| SE-AUTH-56 | P-AUTH-22 | LOG | `password_reset` (username only) | `server/utils/PasswordRecovery/index.js:122` | | was `user_updated` before this branch |
 
 ---
 
