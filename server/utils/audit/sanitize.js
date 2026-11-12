@@ -37,6 +37,8 @@ const SECRET_PATTERNS = [
   ],
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, "[REDACTED_KEY]"],
   [/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED_KEY]"],
+  // Credentials in a URL: scheme://user:password@host
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, "$1[REDACTED]@"],
   // PEM private keys
   [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
