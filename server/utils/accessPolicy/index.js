@@ -111,6 +111,24 @@ function enforceAllowedSelection(policy, selection) {
 }
 
 /**
+ * The workspace-shaped object the model router resolves against. A policy's
+ * `router_id` wins; otherwise the workspace's own router, then `MODEL_ROUTER_ID`.
+ * @param {object} workspace
+ * @param {object|null} policy
+ */
+function policyRouterWorkspace(workspace, policy = null) {
+  if (policy?.router_id)
+    return { ...workspace, router_id: Number(policy.router_id) };
+  if (workspace?.router_id) return workspace;
+  return {
+    ...workspace,
+    router_id: process.env.MODEL_ROUTER_ID
+      ? Number(process.env.MODEL_ROUTER_ID)
+      : null,
+  };
+}
+
+/**
  * Throws when the policy turns agents off for this account.
  * @param {object|null} policy
  */
@@ -214,6 +232,7 @@ module.exports = {
   resolveAllowedSelection,
   enforceAllowedSelection,
   enforceAgentsAllowed,
+  policyRouterWorkspace,
   resolvePolicyChain,
   resolvePolicyForUser,
   getPolicyForUser,

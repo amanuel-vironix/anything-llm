@@ -139,7 +139,13 @@ const ModelRouterRule = {
     });
   },
 
-  update: async function (id = null, data = {}) {
+  /**
+   * @param {number} id - rule id
+   * @param {object} data
+   * @param {number|null} routerId - when given, the rule must belong to this router
+   *   (SMF-12); a rule of another router is reported as not found.
+   */
+  update: async function (id = null, data = {}, routerId = null) {
     if (!id) throw new Error("No rule id provided for update");
 
     const updates = {};
@@ -192,11 +198,16 @@ const ModelRouterRule = {
 
     try {
       const rule = await prisma.model_router_rules.update({
-        where: { id: Number(id) },
+        where: {
+          id: Number(id),
+          ...(routerId !== null ? { router_id: Number(routerId) } : {}),
+        },
         data: updates,
       });
       return { rule: this._hydrate(rule), error: null };
     } catch (error) {
+      if (error?.code === "P2025")
+        return { rule: null, error: "Rule not found.", notFound: true };
       console.error(error.message);
       return (
         handleUniqueConstraintError(error) || {
@@ -207,13 +218,21 @@ const ModelRouterRule = {
     }
   },
 
-  delete: async function (id = null) {
+  /**
+   * @param {number} id - rule id
+   * @param {number|null} routerId - when given, only a rule of this router is deleted
+   * @returns {Promise<boolean>} false when nothing was deleted
+   */
+  delete: async function (id = null, routerId = null) {
     if (!id) return false;
     try {
-      await prisma.model_router_rules.delete({
-        where: { id: Number(id) },
+      const { count } = await prisma.model_router_rules.deleteMany({
+        where: {
+          id: Number(id),
+          ...(routerId !== null ? { router_id: Number(routerId) } : {}),
+        },
       });
-      return true;
+      return count === 1;
     } catch (error) {
       console.error(error.message);
       return false;
@@ -221,21 +240,32 @@ const ModelRouterRule = {
   },
 
   /**
-   * Bulk update priorities for rules within a router.
+   * Bulk update priorities for rules within a router. With `routerId`, every rule must
+   * belong to that router or nothing changes.
    * @param {Array<{id: number, priority: number}>} ruleUpdates
+   * @param {number|null} routerId
    */
-  reorderRules: async function (ruleUpdates = []) {
+  reorderRules: async function (ruleUpdates = [], routerId = null) {
     try {
       await prisma.$transaction(
         ruleUpdates.map(({ id, priority }) =>
           prisma.model_router_rules.update({
-            where: { id: Number(id) },
+            where: {
+              id: Number(id),
+              ...(routerId !== null ? { router_id: Number(routerId) } : {}),
+            },
             data: { priority: Number(priority) },
           })
         )
       );
       return { success: true, error: null };
     } catch (error) {
+      if (error?.code === "P2025")
+        return {
+          success: false,
+          error: "Rule not found in this router.",
+          notFound: true,
+        };
       console.error(error.message);
       return { success: false, error: error.message };
     }

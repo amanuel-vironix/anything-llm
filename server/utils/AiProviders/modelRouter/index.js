@@ -6,12 +6,21 @@ class AnythingLLMModelRouter {
    * @param {Object} workspace
    * @param {Object|null} embedder
    * @param {number|string|null} temperature - Per-request temperature override (defaults to the workspace setting)
+   * @param {((route: {provider: string, model: string}) => {provider: string, model: string|null, substituted: boolean})|null} selectionGuard -
+   *   Applied to the resolved route before the delegate provider is built (an access policy).
+   *   It may swap the route for an allowed default, or throw to refuse it.
    */
-  constructor(workspace, embedder = null, temperature = null) {
+  constructor(
+    workspace,
+    embedder = null,
+    temperature = null,
+    selectionGuard = null
+  ) {
     this.className = "AnythingLLMModelRouter";
     this.workspace = workspace;
     this.embedder = embedder;
     this.temperature = temperature ?? workspace?.openAiTemp;
+    this.selectionGuard = selectionGuard;
     this.routerService = ModelRouterService.getInstance();
     this.router = null;
     this.resolvedRoute = null;
@@ -120,6 +129,23 @@ class AnythingLLMModelRouter {
   }
 
   #finalize() {
+    if (this.selectionGuard) {
+      const allowed = this.selectionGuard({
+        provider: this.resolvedRoute.provider,
+        model: this.resolvedRoute.model,
+      });
+      if (allowed.substituted) {
+        this.routerService.log(
+          `Route ${this.resolvedRoute.provider}/${this.resolvedRoute.model} is not allowed by the access policy → ${allowed.provider}/${allowed.model}`
+        );
+        this.resolvedRoute = {
+          ...this.resolvedRoute,
+          provider: allowed.provider,
+          model: allowed.model,
+          policySubstituted: true,
+        };
+      }
+    }
     this.delegateProvider = this._instrumentProvider(
       getLLMProvider({
         provider: this.resolvedRoute.provider,

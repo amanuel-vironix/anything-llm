@@ -11,6 +11,12 @@ const { WorkspaceParsedFiles } = require("../../models/workspaceParsedFiles");
 const { DocumentManager } = require("../DocumentManager");
 const { safeJsonParse } = require("../http");
 const {
+  getPolicyForUser,
+  enforceAllowedSelection,
+  enforceAgentsAllowed,
+  policyRouterWorkspace,
+} = require("../accessPolicy");
+const {
   USER_AGENT,
   WORKSPACE_AGENT,
   agentSkillsFromSystemSettings,
@@ -213,12 +219,28 @@ class EphemeralAgentHandler extends AgentHandler {
   }
 
   async #providerSetupAndCheck() {
+    // The calling user's access policy (own, then team). Null means today's behavior.
+    const policy = await getPolicyForUser(
+      this.#userId ? { id: Number(this.#userId) } : null
+    );
+    enforceAgentsAllowed(policy);
+
     this.provider = this.#workspace?.agentProvider ?? null;
     this.model = this.#fetchModel();
 
+    // A policy router sends this account's agent traffic through that router too.
+    if (policy?.router_id) this.provider = "anythingllm-router";
+
     // If provider resolved to model router, resolve the actual provider/model
     if (this.provider === "anythingllm-router") {
-      await this.#resolveRouterProvider();
+      await this.#resolveRouterProvider(null, policy);
+    } else if (policy) {
+      const selection = enforceAllowedSelection(policy, {
+        provider: this.provider,
+        model: this.model ?? null,
+      });
+      this.provider = selection.provider;
+      this.model = selection.model;
     }
 
     if (!this.provider)
@@ -227,18 +249,16 @@ class EphemeralAgentHandler extends AgentHandler {
     this.checkSetup();
   }
 
-  async #resolveRouterProvider(prompt = null) {
+  async #resolveRouterProvider(prompt = null, policy = null) {
     const { AnythingLLMModelRouter } = require("../AiProviders/modelRouter");
-    const routerWorkspace = this.#workspace?.router_id
-      ? this.#workspace
-      : {
-          ...this.#workspace,
-          router_id: process.env.MODEL_ROUTER_ID
-            ? Number(process.env.MODEL_ROUTER_ID)
-            : null,
-        };
+    const routerWorkspace = policyRouterWorkspace(this.#workspace, policy);
 
-    const router = new AnythingLLMModelRouter(routerWorkspace);
+    const router = new AnythingLLMModelRouter(
+      routerWorkspace,
+      null,
+      null,
+      policy ? (route) => enforceAllowedSelection(policy, route) : null
+    );
     const { ModelRouterService } = require("../router");
     const workspace = this.#workspace;
     const user = this.#userId ? { id: this.#userId } : null;

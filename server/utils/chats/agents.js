@@ -93,6 +93,24 @@ async function grepAgents({
 
   const agentHandles = WorkspaceAgentInvocation.parseAgents(message);
   if (agentHandles.length > 0 || nativeToolingEnabled) {
+    // An access policy can turn agents off for this account. An explicit @agent call
+    // is refused with a message; automatic mode just carries on as a normal chat.
+    const { getPolicyForUser } = require("../accessPolicy");
+    const policy = await getPolicyForUser(user);
+    if (policy?.allow_agents === false) {
+      if (agentHandles.length === 0) return false;
+      writeResponseChunk(response, {
+        id: uuid,
+        type: "abort",
+        textResponse: null,
+        sources: [],
+        close: true,
+        error:
+          "Agents are disabled for your account. Ask an administrator if you need them.",
+      });
+      return true;
+    }
+
     const { invocation: newInvocation } = await WorkspaceAgentInvocation.new({
       prompt: message,
       workspace: workspace,

@@ -229,17 +229,77 @@ const ModelRouter = {
     }
   },
 
+  /**
+   * Delete a router and unbind everything that uses it, in one transaction (decision 21:
+   * unbind and fall back, SMF-12):
+   * - workspaces bound to it (`router_id`) lose the binding; a chat or agent provider of
+   *   `anythingllm-router` is cleared so they use the system provider;
+   * - when it is `MODEL_ROUTER_ID`, workspaces that rely on that setting fall back the
+   *   same way, and the setting is cleared by the caller (see `unsetSystemRouter`);
+   * - access policies that name it lose their `router_id`.
+   * Refused when the system provider itself is this router, since there is nothing to
+   * fall back to.
+   * @param {number} id
+   * @returns {Promise<{success: boolean, error?: string, unbound?: {workspaces: number, policies: number, systemRouter: boolean}}>}
+   */
   delete: async function (id = null) {
-    if (!id) return false;
+    if (!id) return { success: false, error: "No router id provided." };
+    const routerId = Number(id);
+    const isSystemRouter =
+      !!process.env.MODEL_ROUTER_ID &&
+      Number(process.env.MODEL_ROUTER_ID) === routerId;
+    if (isSystemRouter && process.env.LLM_PROVIDER === "anythingllm-router")
+      return {
+        success: false,
+        error:
+          "This router is the system LLM provider. Choose another system LLM provider before deleting it.",
+      };
+
+    const ROUTER = "anythingllm-router";
+    // Which workspaces use this router: their own binding, or (for the system router)
+    // a router provider with no binding of their own.
+    const bound = isSystemRouter
+      ? { OR: [{ router_id: routerId }, { router_id: null }] }
+      : { router_id: routerId };
 
     try {
-      await prisma.model_routers.delete({
-        where: { id: Number(id) },
-      });
-      return true;
+      const [agentReset, chatReset, unbound, policies] =
+        await prisma.$transaction([
+          prisma.workspaces.updateMany({
+            where: { ...bound, agentProvider: ROUTER },
+            data: { agentProvider: null, agentModel: null },
+          }),
+          prisma.workspaces.updateMany({
+            where: { ...bound, chatProvider: ROUTER },
+            data: { chatProvider: null, chatModel: null },
+          }),
+          prisma.workspaces.updateMany({
+            where: { router_id: routerId },
+            data: { router_id: null },
+          }),
+          prisma.access_policies.updateMany({
+            where: { router_id: routerId },
+            data: { router_id: null },
+          }),
+          prisma.model_routers.delete({ where: { id: routerId } }),
+        ]);
+      return {
+        success: true,
+        unbound: {
+          workspaces: Math.max(
+            agentReset.count,
+            chatReset.count,
+            unbound.count
+          ),
+          policies: policies.count,
+          systemRouter: isSystemRouter,
+        },
+      };
     } catch (error) {
       console.error(error.message);
-      return false;
+      if (error?.code === "P2025")
+        return { success: false, error: "Router not found." };
+      return { success: false, error: error.message };
     }
   },
 

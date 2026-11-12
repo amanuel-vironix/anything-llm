@@ -416,7 +416,11 @@ async function resolveLLMConnector({
       connector: null,
       routingMetadata: null,
       prefetchedContext: null,
-      error: `Model router error: ${routerError.message}`,
+      // Access policy refusals are written for the user; show them as they are.
+      error:
+        routerError?.name === "AccessPolicyError"
+          ? routerError.message
+          : `Model router error: ${routerError.message}`,
     };
   }
 }
