@@ -8,7 +8,10 @@ class AnythingLLMModelRouter {
    * @param {number|string|null} temperature - Per-request temperature override (defaults to the workspace setting)
    * @param {((route: {provider: string, model: string}) => {provider: string, model: string|null, substituted: boolean})|null} selectionGuard -
    *   Applied to the resolved route before the delegate provider is built (an access policy).
-   *   It may swap the route for an allowed default, or throw to refuse it.
+   *   It may swap the route for an allowed default, or throw to refuse it. Its
+   *   `allows(route)` decides whether LLM rules may run: the classifier sends the
+   *   prompt to the router's fallback model, so a policy that doesn't allow that
+   *   model skips LLM rules. A guard without `allows` skips them too (fail closed).
    */
   constructor(
     workspace,
@@ -79,15 +82,30 @@ class AnythingLLMModelRouter {
       return;
     }
 
-    // Step 2: LLM rules (cached to avoid expensive re-classification)
-    const { route: llmResult } = await this.routerService.evaluateLLMRules(
-      this._routeState,
-      this._routeKey,
-      rules,
-      context,
-      this.router,
-      stickyMs
-    );
+    // Step 2: LLM rules (cached to avoid expensive re-classification). The
+    // classifier is the router's fallback model, which sees the prompt, so it
+    // runs only if the access policy allows that model.
+    const classifierAllowed =
+      !this.selectionGuard ||
+      (typeof this.selectionGuard.allows === "function" &&
+        this.selectionGuard.allows({
+          provider: this.router.fallback_provider,
+          model: this.router.fallback_model,
+        }));
+    if (!classifierAllowed)
+      this.routerService.log(
+        `LLM rules skipped: classifier ${this.router.fallback_provider}/${this.router.fallback_model} is not allowed by the access policy`
+      );
+    const { route: llmResult } = classifierAllowed
+      ? await this.routerService.evaluateLLMRules(
+          this._routeState,
+          this._routeKey,
+          rules,
+          context,
+          this.router,
+          stickyMs
+        )
+      : { route: null };
     if (llmResult) {
       this.resolvedRoute = llmResult;
       this.routerService.setStickyRoute(

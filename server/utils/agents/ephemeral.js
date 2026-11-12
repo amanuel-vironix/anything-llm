@@ -13,6 +13,7 @@ const { safeJsonParse } = require("../http");
 const {
   getPolicyForUser,
   enforceAllowedSelection,
+  routerSelectionGuard,
   enforceAgentsAllowed,
   policyRouterWorkspace,
   logPolicyRefusal,
@@ -267,12 +268,9 @@ class EphemeralAgentHandler extends AgentHandler {
       routerWorkspace,
       null,
       null,
-      policy
-        ? (route) =>
-            enforceAllowedSelection(policy, route, {
-              userId: this.#userId ? Number(this.#userId) : null,
-            })
-        : null
+      routerSelectionGuard(policy, {
+        userId: this.#userId ? Number(this.#userId) : null,
+      })
     );
     const { ModelRouterService } = require("../router");
     const workspace = this.#workspace;

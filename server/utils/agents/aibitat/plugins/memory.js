@@ -83,11 +83,14 @@ const memory = {
           },
           search: async function (query = "") {
             try {
-              const workspace = this.super.handlerProps.invocation.workspace;
+              const { invocation } = this.super.handlerProps;
+              const workspace = invocation.workspace;
               const { connector: LLMConnector } =
                 await resolveProviderConnector({
                   workspace,
                   prompt: query,
+                  // The invoking user's policy applies to the search's model too.
+                  user: invocation.user_id ? { id: invocation.user_id } : null,
                 });
               const vectorDB = getVectorDbClass();
               const { contextTexts = [], sources = [] } =

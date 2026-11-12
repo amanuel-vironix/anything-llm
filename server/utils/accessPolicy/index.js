@@ -125,6 +125,22 @@ function enforceAllowedSelection(policy, selection, { userId = null } = {}) {
 }
 
 /**
+ * The guard a model router applies for this policy, or null with no policy.
+ * Calling it enforces the policy on a resolved route (substitute or throw);
+ * `guard.allows(route)` is a side-effect-free check, used before a model is
+ * called for something other than the answer (the router's LLM classifier).
+ * @param {object|null} policy
+ * @param {{userId?: number|null}} opts
+ * @returns {null | ((route: {provider: string, model: string}) => object) & {allows: Function}}
+ */
+function routerSelectionGuard(policy, { userId = null } = {}) {
+  if (!policy) return null;
+  const guard = (route) => enforceAllowedSelection(policy, route, { userId });
+  guard.allows = (route) => isModelAllowed(policy, route);
+  return guard;
+}
+
+/**
  * Record a refusal in the event log without blocking or failing the caller.
  * @param {string} event
  * @param {object} metadata
@@ -266,6 +282,7 @@ module.exports = {
   isModelAllowed,
   resolveAllowedSelection,
   enforceAllowedSelection,
+  routerSelectionGuard,
   enforceAgentsAllowed,
   logPolicyRefusal,
   policyRouterWorkspace,

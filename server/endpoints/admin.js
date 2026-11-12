@@ -542,11 +542,13 @@ function adminEndpoints(app) {
           body.name ?? null,
           scope
         );
-        await EventLogs.logEvent(
-          "api_key_created",
-          { createdBy: user?.username, name: apiKey?.name, ...scope },
-          user?.id
-        );
+        if (apiKey) {
+          await EventLogs.logEvent(
+            "api_key_created",
+            { createdBy: user?.username, name: apiKey.name, ...scope },
+            user?.id
+          );
+        }
         return response.status(200).json({
           apiKey,
           error,

@@ -28,6 +28,7 @@ const { DocumentManager } = require("../DocumentManager");
 const {
   getPolicyForUser,
   enforceAllowedSelection,
+  routerSelectionGuard,
   enforceAgentsAllowed,
   policyRouterWorkspace,
   logPolicyRefusal,
@@ -566,12 +567,9 @@ class AgentHandler {
       routerWorkspace,
       null,
       null,
-      policy
-        ? (route) =>
-            enforceAllowedSelection(policy, route, {
-              userId: this.invocation.user_id ?? null,
-            })
-        : null
+      routerSelectionGuard(policy, {
+        userId: this.invocation.user_id ?? null,
+      })
     );
     const { ModelRouterService } = require("../router");
     const workspace = this.invocation.workspace;

@@ -7,6 +7,13 @@ process.env.STORAGE_DIR = require("fs").mkdtempSync(
 const { createTestPrisma } = require("../../helpers/sqliteTestDb");
 const mockDb = createTestPrisma();
 jest.mock("../../../utils/prisma", () => mockDb.prisma);
+// The LLM classifier sends the prompt to the router's fallback model; record calls.
+jest.mock("../../../utils/agents/aibitat/plugins/router-classifier", () => ({
+  classifyWithLLM: jest.fn(async (rules) => rules[0]),
+}));
+const {
+  classifyWithLLM,
+} = require("../../../utils/agents/aibitat/plugins/router-classifier");
 
 const { resolveProviderConnector } = require("../../../utils/helpers");
 const { ModelRouterService } = require("../../../utils/router");
@@ -182,5 +189,77 @@ describe("policy router (acceptance 3)", () => {
         prompt: "hi",
       })
     ).rejects.toMatchObject({ name: "AccessPolicyError" });
+  });
+});
+
+describe("router LLM rules under a policy", () => {
+  async function routerWithLlmRule(fallbackModel) {
+    const created = await prisma.model_routers.create({
+      data: {
+        name: `llm-r${++seq}`,
+        fallback_provider: PROVIDER,
+        fallback_model: fallbackModel,
+        cooldown_seconds: 0,
+      },
+    });
+    await prisma.model_router_rules.create({
+      data: {
+        router_id: created.id,
+        priority: 1,
+        type: "llm",
+        title: "coding",
+        description: "coding questions",
+        route_provider: PROVIDER,
+        route_model: "allowed-model",
+      },
+    });
+    ModelRouterService.invalidateRouter(created.id);
+    return created;
+  }
+  beforeEach(() => classifyWithLLM.mockClear());
+
+  it("never sends the prompt to a classifier model the policy doesn't allow", async () => {
+    const r = await routerWithLlmRule("classifier-forbidden");
+    const { user } = await userWithPolicy({
+      allowed_models: allow("allowed-model"),
+      default_provider: PROVIDER,
+      default_model: "allowed-model",
+      router_id: r.id,
+    });
+    const { connector } = await resolveProviderConnector({
+      workspace: workspace(),
+      user,
+      prompt: "private question",
+    });
+    expect(classifyWithLLM).not.toHaveBeenCalled();
+    expect(connector.model).toBe("allowed-model");
+  });
+
+  it("runs LLM rules when the policy allows the classifier model", async () => {
+    const r = await routerWithLlmRule("classifier-ok");
+    const { user } = await userWithPolicy({
+      allowed_models: allow("allowed-model", "classifier-ok"),
+      router_id: r.id,
+    });
+    const { routingMetadata } = await resolveProviderConnector({
+      workspace: workspace(),
+      user,
+      prompt: "write code",
+    });
+    expect(classifyWithLLM).toHaveBeenCalledTimes(1);
+    expect(routingMetadata.routedTo.model).toBe("allowed-model");
+  });
+
+  it("runs LLM rules as before for a user without a policy", async () => {
+    const r = await routerWithLlmRule("classifier-forbidden");
+    const user = await prisma.users.create({
+      data: { username: `nopol${++seq}`, password: "x" },
+    });
+    await resolveProviderConnector({
+      workspace: workspace({ chatProvider: "anythingllm-router", router_id: r.id }),
+      user,
+      prompt: "write code",
+    });
+    expect(classifyWithLLM).toHaveBeenCalledTimes(1);
   });
 });

@@ -303,7 +303,7 @@ const Team = {
    * Delete a team in one transaction:
    * - members fall back to their own policy or role default (membership rows go);
    * - team workspaces become admin-only (`team_id` null, decision 30);
-   * - shared presets and variables go back to their owners.
+   * - shared presets go back to their owners; team prompt variables are deleted.
    * @returns {Promise<{success: boolean, counts?: object, error?: string}>}
    */
   delete: async function (id = null) {
@@ -331,10 +331,9 @@ const Team = {
             where: { team_id },
             data: { team_id: 0 },
           }),
-          prisma.system_prompt_variables.updateMany({
-            where: { team_id },
-            data: { team_id: null },
-          }),
+          // Team variables are deleted, not made global: null team_id means
+          // "visible to everyone", which would leak a team's values instance-wide.
+          prisma.system_prompt_variables.deleteMany({ where: { team_id } }),
           prisma.teams.delete({ where: { id: team_id } }),
         ]);
       return {

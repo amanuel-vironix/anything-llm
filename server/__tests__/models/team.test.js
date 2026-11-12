@@ -131,6 +131,10 @@ describe("Team.delete", () => {
       ["/a", 0, "p"],
       ["/b", 0, "mine"],
     ]);
+    // Team variables are deleted, never made global (null team_id = everyone).
+    expect(
+      await prisma.system_prompt_variables.count({ where: { key: `k${seq}` } })
+    ).toBe(0);
   });
 
   it("changes nothing when the team does not exist", async () => {

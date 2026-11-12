@@ -1024,6 +1024,7 @@ function apiWorkspaceEndpoints(app) {
         const { connector: LLMConnector } = await resolveProviderConnector({
           workspace,
           prompt: String(query),
+          user: apiKeyUser(response),
         });
 
         const results = await VectorDb.performSimilaritySearch({

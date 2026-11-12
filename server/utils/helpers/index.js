@@ -737,6 +737,7 @@ async function resolveProviderConnector({
   const {
     getPolicyForUser,
     enforceAllowedSelection,
+    routerSelectionGuard,
     policyRouterWorkspace,
   } = require("../accessPolicy");
   const effectiveProvider = workspace?.chatProvider || process.env.LLM_PROVIDER;
@@ -789,10 +790,7 @@ async function resolveProviderConnector({
     temperatureOverride,
     // A routed model the policy doesn't allow is swapped for the policy default
     // before the delegate is built, so it is never called.
-    policy
-      ? (route) =>
-          enforceAllowedSelection(policy, route, { userId: user?.id ?? null })
-      : null
+    routerSelectionGuard(policy, { userId: user?.id ?? null })
   );
   const ctx = await ModelRouterService.gatherRoutingContext({
     workspace,
